@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { -webkit-font-smoothing: antialiased; }
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-ink text-paper font-sans;
+    font-feature-settings: "cv11", "ss01";
+    user-select: none;
+    overflow: hidden;
+  }
+  :focus-visible { @apply outline-none ring-2 ring-brass/70 ring-offset-2 ring-offset-ink rounded-xl; }
+}
+
+@layer utilities {
+  .scroll-area { scrollbar-width: thin; scrollbar-color: #272B34 transparent; }
+  .scroll-area::-webkit-scrollbar { width: 8px; }
+  .scroll-area::-webkit-scrollbar-thumb { background: #272B34; border-radius: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
