@@ -1,18 +1,20 @@
 {
   "name": "mode-jeu",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "tauri": "tauri",
     "app": "tauri dev",
-    "release": "tauri build"
+    "release": "node scripts/tauri-release.mjs"
   },
   "dependencies": {
     "@radix-ui/react-switch": "^1.1.1",
     "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.462.0",

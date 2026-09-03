@@ -413,7 +413,11 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run_app() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            #[cfg(windows)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             setup_tray(app.handle())?;
             Ok(())
         })

@@ -10,6 +10,7 @@ Application Windows légère (Tauri 2 + React) qui ferme les applications gourma
 - Bascule sur le plan d'alimentation Performances élevées et restaure le précédent à la sortie.
 - Arrête les services optionnels (SysMain, WSearch) si l'app est lancée en administrateur.
 - Se minimise dans la barre des tâches à l'activation (la croix aussi). Clic gauche sur l'icône tray pour rouvrir, clic droit pour quitter.
+- Vérifie les mises à jour au lancement, les télécharge en silence, puis propose un redémarrage. L'installateur NSIS s'exécute sans assistant (`quiet`).
 
 ## Sécurités
 
@@ -22,6 +23,8 @@ npm install
 npm run app        # développement
 npm run release    # installeur NSIS dans src-tauri/target/release/bundle
 ```
+
+Les releases GitHub (`v0.2.0`, …) publient `latest.json` + l'installeur signé. L'app les récupère toute seule.
 
 Prérequis : Rust stable, Node 18+, Visual Studio Build Tools (C++), WebView2 (déjà présent sur Windows 10/11 à jour).
 

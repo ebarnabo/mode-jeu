@@ -7,3 +7,6 @@ src-tauri/target/
 *.log
 .DS_Store
 Thumbs.db
+*.key
+*.key.pub
+*.key.pass

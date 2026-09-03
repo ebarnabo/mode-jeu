@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Gamepad2, Lock, Search, RotateCcw, Loader2, Shield } from "lucide-react";
+import { UpdateBar } from "@/components/UpdateBar";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -131,6 +132,8 @@ export default function App() {
           {active ? "Actif" : "En veille"}
         </div>
       </header>
+
+      <UpdateBar gameMode={active} onRestore={async () => { await run("restore"); }} />
 
       <main className="scroll-area flex-1 overflow-y-auto px-8" style={{ paddingBottom: 140 }}>
         <section className="animate-rise rounded-3xl border border-line bg-gradient-to-b from-raised to-surface p-8">
