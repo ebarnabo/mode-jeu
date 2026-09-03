@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use sysinfo::{ProcessesToUpdate, System};
-use tauri::{AppHandle, Manager};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Manager, WindowEvent};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -327,12 +329,19 @@ fn activate(app: AppHandle) -> Result<Session, String> {
     }
 
     write_json(&app, "session.json", &session);
+    dock_to_taskbar(&app);
     Ok(session)
 }
 
 #[tauri::command]
 fn restore(app: AppHandle) -> Result<Session, String> {
-    let session = read_json::<Session>(&app, "session.json");
+    let empty = restore_session(&app);
+    show_main(&app);
+    Ok(empty)
+}
+
+fn restore_session(app: &AppHandle) -> Session {
+    let session = read_json::<Session>(app, "session.json");
 
     for path in &session.closed {
         let mut c = Command::new(path);
@@ -348,13 +357,72 @@ fn restore(app: AppHandle) -> Result<Session, String> {
     }
 
     let empty = Session::default();
-    write_json(&app, "session.json", &empty);
-    Ok(empty)
+    write_json(app, "session.json", &empty);
+    empty
+}
+
+fn show_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+fn dock_to_taskbar(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.minimize();
+    }
+}
+
+fn quit_app(app: &AppHandle) {
+    let _ = restore_session(app);
+    app.exit(0);
+}
+
+fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open", "Ouvrir", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let mut tray = TrayIconBuilder::new()
+        .tooltip("Mode Jeu")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => show_main(app),
+            "quit" => quit_app(app),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run_app() {
     tauri::Builder::default()
+        .setup(|app| {
+            setup_tray(app.handle())?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.minimize();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,

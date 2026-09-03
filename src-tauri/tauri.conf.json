@@ -12,12 +12,14 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Mode Jeu",
         "width": 880,
         "height": 720,
         "minWidth": 720,
         "minHeight": 600,
         "decorations": true,
+        "skipTaskbar": false,
         "theme": "Dark",
         "backgroundColor": "#0E0F12"
       }

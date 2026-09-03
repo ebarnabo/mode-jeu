@@ -9,6 +9,7 @@ Application Windows légère (Tauri 2 + React) qui ferme les applications gourma
 - Mémorise le chemin de chaque application fermée pour la relancer d'un clic.
 - Bascule sur le plan d'alimentation Performances élevées et restaure le précédent à la sortie.
 - Arrête les services optionnels (SysMain, WSearch) si l'app est lancée en administrateur.
+- Se minimise dans la barre des tâches à l'activation (la croix aussi). Clic gauche sur l'icône tray pour rouvrir, clic droit pour quitter.
 
 ## Sécurités
 
