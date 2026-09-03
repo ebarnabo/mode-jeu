@@ -1,6 +1,6 @@
 [package]
 name = "mode-jeu"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [lib]
@@ -19,7 +19,11 @@ tauri-plugin-process = "2.3.1"
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-updater = "2.11.0"
-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_Memory",
+] }
 
 [profile.release]
 opt-level = "s"

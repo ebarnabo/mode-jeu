@@ -11,6 +11,7 @@ Application Windows légère (Tauri 2 + React) qui ferme les applications gourma
 - Arrête les services optionnels (SysMain, WSearch) si l'app est lancée en administrateur.
 - Se minimise dans la barre des tâches à l'activation (la croix aussi). Clic gauche sur l'icône tray pour rouvrir, clic droit pour quitter.
 - Vérifie les mises à jour au lancement, les télécharge en silence, puis propose un redémarrage. L'installateur NSIS s'exécute sans assistant (`quiet`).
+- Overlay multi-écran léger : CPU, GPU, températures, RAM et FPS (via RTSS si présent), masquable métrique par métrique.
 
 ## Sécurités
 

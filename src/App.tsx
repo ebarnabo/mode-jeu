@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Gamepad2, Lock, Search, RotateCcw, Loader2, Shield } from "lucide-react";
 import { UpdateBar } from "@/components/UpdateBar";
+import { MonitorPicker, type MonitorInfo } from "@/components/MonitorPicker";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,12 +21,31 @@ type ProcGroup = {
   foreground: boolean;
 };
 
+type OverlayConfig = {
+  enabled: boolean;
+  always: boolean;
+  monitor_name: string | null;
+  game_monitor_name: string | null;
+  show_cpu: boolean;
+  show_gpu: boolean;
+  show_temps: boolean;
+  show_fps: boolean;
+  show_ram: boolean;
+  opacity: number;
+  position: string;
+  interval_ms: number;
+  hidden: boolean;
+};
+
 type Config = {
   keep: string[];
   high_performance: boolean;
   protect_foreground: boolean;
   stop_services: boolean;
   services: string[];
+  minimize_on_activate: boolean;
+  start_with_windows: boolean;
+  overlay: OverlayConfig;
 };
 
 type Session = {
@@ -39,18 +59,22 @@ export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [procs, setProcs] = useState<ProcGroup[]>([]);
+  const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
+  const [monitorMode, setMonitorMode] = useState<"overlay" | "game">("overlay");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [c, s, p] = await Promise.all([
+    const [c, s, p, m] = await Promise.all([
       invoke<Config>("get_config"),
       invoke<Session>("get_session"),
       invoke<ProcGroup[]>("list_processes"),
+      invoke<MonitorInfo[]>("list_monitors").catch(() => [] as MonitorInfo[]),
     ]);
     setConfig(c);
     setSession(s);
     setProcs(p);
+    setMonitors(m);
   }, []);
 
   useEffect(() => {
@@ -67,6 +91,11 @@ export default function App() {
     setConfig(merged);
     await invoke("save_config", { config: merged });
     setProcs(await invoke<ProcGroup[]>("list_processes"));
+  };
+
+  const patchOverlay = (next: Partial<OverlayConfig>) => {
+    if (!config) return;
+    patch({ overlay: { ...config.overlay, ...next } });
   };
 
   const toggleKeep = (key: string, keep: boolean) => {
@@ -133,7 +162,12 @@ export default function App() {
         </div>
       </header>
 
-      <UpdateBar gameMode={active} onRestore={async () => { await run("restore"); }} />
+      <UpdateBar
+        gameMode={active}
+        onRestore={async () => {
+          await run("restore");
+        }}
+      />
 
       <main className="scroll-area flex-1 overflow-y-auto px-8" style={{ paddingBottom: 140 }}>
         <section className="animate-rise rounded-3xl border border-line bg-gradient-to-b from-raised to-surface p-8">
@@ -164,7 +198,7 @@ export default function App() {
           <CardHeader>
             <CardTitle>Réglages</CardTitle>
             <CardDescription>
-              Ce qui se passe en plus de la fermeture des applications quand tu lances le mode jeu.
+              Options utiles pour une session de jeu propre et prévisible.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-6">
@@ -181,11 +215,167 @@ export default function App() {
               onChange={(v) => patch({ protect_foreground: v })}
             />
             <Setting
+              label="Réduire dans la barre des tâches à l'activation"
+              hint="Laisse la place au jeu dès que le mode est lancé."
+              checked={config.minimize_on_activate}
+              onChange={(v) => patch({ minimize_on_activate: v })}
+            />
+            <Setting
+              label="Démarrer avec Windows"
+              hint="Mode Jeu s'ouvre à la connexion de ta session."
+              checked={config.start_with_windows}
+              onChange={(v) => patch({ start_with_windows: v })}
+            />
+            <Setting
               label={`Arrêter les services ${config.services.join(", ")}`}
               hint="Nécessite de lancer Mode Jeu en administrateur."
               checked={config.stop_services}
               onChange={(v) => patch({ stop_services: v })}
             />
+          </CardContent>
+        </Card>
+
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>Overlay performances</CardTitle>
+            <CardDescription>
+              Affiche CPU, GPU, températures et FPS sur un second écran, avec un coût minimal
+              (~1 lecture / s).
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-6">
+            <Setting
+              label="Activer l'overlay"
+              hint="Apparait pendant le mode jeu (ou toujours, selon l'option suivante)."
+              checked={config.overlay.enabled}
+              onChange={(v) => patchOverlay({ enabled: v, hidden: false })}
+            />
+            <Setting
+              label="Aussi hors mode jeu"
+              hint="Garde le panneau visible même quand le mode jeu est éteint."
+              checked={config.overlay.always}
+              onChange={(v) => patchOverlay({ always: v })}
+            />
+
+            <MonitorPicker
+              monitors={monitors}
+              overlayName={config.overlay.monitor_name}
+              gameName={config.overlay.game_monitor_name}
+              mode={monitorMode}
+              onModeChange={setMonitorMode}
+              onSelect={(name) =>
+                patchOverlay(
+                  monitorMode === "overlay"
+                    ? { monitor_name: name }
+                    : { game_monitor_name: name }
+                )
+              }
+            />
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Setting
+                label="FPS (écran de jeu)"
+                hint="Via RTSS / MSI Afterburner si disponible."
+                checked={config.overlay.show_fps}
+                onChange={(v) => patchOverlay({ show_fps: v })}
+              />
+              <Setting
+                label="CPU"
+                hint="Charge processeur globale."
+                checked={config.overlay.show_cpu}
+                onChange={(v) => patchOverlay({ show_cpu: v })}
+              />
+              <Setting
+                label="GPU"
+                hint="Utilisation NVIDIA (nvidia-smi) si présent."
+                checked={config.overlay.show_gpu}
+                onChange={(v) => patchOverlay({ show_gpu: v })}
+              />
+              <Setting
+                label="Températures"
+                hint="CPU (capteurs) et GPU NVIDIA."
+                checked={config.overlay.show_temps}
+                onChange={(v) => patchOverlay({ show_temps: v })}
+              />
+              <Setting
+                label="RAM"
+                hint="Mémoire utilisée."
+                checked={config.overlay.show_ram}
+                onChange={(v) => patchOverlay({ show_ram: v })}
+              />
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <p className="text-sm font-medium">Position</p>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    ["top-left", "Haut gauche"],
+                    ["top-right", "Haut droite"],
+                    ["bottom-left", "Bas gauche"],
+                    ["bottom-right", "Bas droite"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => patchOverlay({ position: value })}
+                    className={cn(
+                      "rounded-xl border px-3 py-2 text-[13px] font-semibold transition-colors",
+                      config.overlay.position === value
+                        ? "border-brass/40 bg-brass/15 text-brass"
+                        : "border-line bg-surface text-muted hover:text-paper"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-sm font-medium">Opacité</p>
+                <span className="text-[13px] text-muted">{config.overlay.opacity}%</span>
+              </div>
+              <input
+                type="range"
+                min={40}
+                max={100}
+                value={config.overlay.opacity}
+                onChange={(e) => patchOverlay({ opacity: Number(e.target.value) })}
+                className="w-full accent-[#D6A64A]"
+              />
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <p className="text-sm font-medium">Rafraîchissement</p>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  [500, "0,5 s"],
+                  [1000, "1 s"],
+                  [2000, "2 s"],
+                ].map(([ms, label]) => (
+                  <button
+                    key={ms}
+                    type="button"
+                    onClick={() => patchOverlay({ interval_ms: Number(ms) })}
+                    className={cn(
+                      "rounded-xl border px-3 py-2 text-[13px] font-semibold transition-colors",
+                      config.overlay.interval_ms === ms
+                        ? "border-brass/40 bg-brass/15 text-brass"
+                        : "border-line bg-surface text-muted hover:text-paper"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[13px] text-muted">
+                Plus l'intervalle est long, moins l'overlay consomme. Masquable aussi depuis
+                l'icône tray.
+              </p>
+            </div>
           </CardContent>
         </Card>
 

@@ -1,3 +1,6 @@
+mod metrics;
+mod overlay;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -5,14 +8,15 @@ use std::process::Command;
 use sysinfo::{ProcessesToUpdate, System};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+
+use overlay::OverlayConfig;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x0800_0000;
 
-/// Jamais tué, quelles que soient les options. Filet de sécurité dur.
 const CRITICAL: &[&str] = &[
     "system", "registry", "smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe",
     "services.exe", "lsass.exe", "svchost.exe", "dwm.exe", "explorer.exe",
@@ -24,36 +28,24 @@ const CRITICAL: &[&str] = &[
     "applicationframehost.exe", "systemsettings.exe", "msedgewebview2.exe",
     "securityhealthsystray.exe", "securityhealthservice.exe", "msmpeng.exe", "nissrv.exe",
     "widgetservice.exe", "widgets.exe", "phoneexperiencehost.exe",
-    // Pilotes / overlays indispensables au jeu
     "radeonsoftware.exe", "amdow.exe", "nvcontainer.exe", "nvdisplay.container.exe",
 ];
 
-/// Launchers, anti-cheats, overlays et outils gaming — protégés par défaut.
 const SAFE_EXACT: &[&str] = &[
-    // Steam
     "steam.exe", "steamwebhelper.exe", "steamservice.exe", "steamerrorreporter.exe",
     "gameoverlayui.exe", "gameoverlayui64.exe", "streamingclient.exe",
-    // Epic
     "epicgameslauncher.exe", "epicwebhelper.exe", "epicgamesupdater.exe",
     "unrealcefsubprocess.exe",
-    // EA / Origin
     "eadesktop.exe", "ealocalhostsvc.exe", "origin.exe", "originwebhelper.exe",
-    // Battle.net / Blizzard
     "battle.net.exe", "blizzardupdateagent.exe",
-    // GOG
     "galaxyclient.exe", "goggalaxy.exe",
-    // Ubisoft
     "upc.exe", "ubisoftconnect.exe",
-    // Riot / Vanguard
     "riotclientservices.exe", "riotclientux.exe", "riotclientuxrender.exe",
     "vgc.exe", "vgtray.exe",
-    // Xbox / Microsoft Store
     "xboxapp.exe", "gamebar.exe", "gamebarftserver.exe", "gamebarpresencewriter.exe",
     "xboxgamespeech.exe",
-    // GPU / overlays
     "nvidia share.exe", "nvsphelper64.exe", "nvidia notification.exe",
     "rtsshooksloader64.exe", "msiafterburner.exe",
-    // Sync / cloud utiles au gaming
     "onedrive.exe", "onedrivestandaloneupdater.exe",
 ];
 
@@ -74,6 +66,10 @@ const SAFE_PATH_FRAGMENTS: &[&str] = &[
 
 const HIGH_PERF_GUID: &str = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Serialize, Clone)]
 pub struct ProcGroup {
     pub key: String,
@@ -89,10 +85,24 @@ pub struct ProcGroup {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub keep: Vec<String>,
+    #[serde(default = "default_true")]
     pub high_performance: bool,
+    #[serde(default = "default_true")]
     pub protect_foreground: bool,
+    #[serde(default)]
     pub stop_services: bool,
+    #[serde(default = "default_services")]
     pub services: Vec<String>,
+    #[serde(default = "default_true")]
+    pub minimize_on_activate: bool,
+    #[serde(default)]
+    pub start_with_windows: bool,
+    #[serde(default)]
+    pub overlay: OverlayConfig,
+}
+
+fn default_services() -> Vec<String> {
+    vec!["SysMain".into(), "WSearch".into()]
 }
 
 impl Default for Config {
@@ -106,7 +116,10 @@ impl Default for Config {
             high_performance: true,
             protect_foreground: true,
             stop_services: false,
-            services: vec!["SysMain".into(), "WSearch".into()],
+            services: default_services(),
+            minimize_on_activate: true,
+            start_with_windows: false,
+            overlay: OverlayConfig::default(),
         }
     }
 }
@@ -164,7 +177,6 @@ fn is_safe_by_default(name: &str, path: &Option<String>) -> bool {
     false
 }
 
-/// Un process est candidat s'il n'est pas dans C:\Windows et possède un chemin.
 fn is_candidate(path: &Option<String>) -> bool {
     match path {
         Some(p) => {
@@ -199,7 +211,6 @@ fn scan(cfg: &Config) -> Vec<ProcGroup> {
     sys.refresh_processes(ProcessesToUpdate::All, true);
     let fg = foreground_pid();
     let self_pid = std::process::id();
-
     let mut map: HashMap<String, ProcGroup> = HashMap::new();
 
     for (pid, proc_) in sys.processes() {
@@ -241,6 +252,52 @@ fn scan(cfg: &Config) -> Vec<ProcGroup> {
     v
 }
 
+fn apply_startup(enabled: bool) {
+    #[cfg(windows)]
+    {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let value = format!("\"{}\"", exe.display());
+        if enabled {
+            let _ = run(
+                "reg",
+                &[
+                    "add",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    "/v",
+                    "ModeJeu",
+                    "/t",
+                    "REG_SZ",
+                    "/d",
+                    &value,
+                    "/f",
+                ],
+            );
+        } else {
+            let _ = run(
+                "reg",
+                &[
+                    "delete",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                    "/v",
+                    "ModeJeu",
+                    "/f",
+                ],
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = enabled;
+}
+
+fn sync_from_config(app: &AppHandle, cfg: &Config) {
+    apply_startup(cfg.start_with_windows);
+    let session = read_json::<Session>(app, "session.json");
+    overlay::sync_overlay(app, &cfg.overlay, session.active);
+    let _ = app.emit("overlay-config", &cfg.overlay);
+}
+
 #[tauri::command]
 fn get_config(app: AppHandle) -> Config {
     read_json::<Config>(&app, "config.json")
@@ -249,6 +306,7 @@ fn get_config(app: AppHandle) -> Config {
 #[tauri::command]
 fn save_config(app: AppHandle, config: Config) {
     write_json(&app, "config.json", &config);
+    sync_from_config(&app, &config);
 }
 
 #[tauri::command]
@@ -259,6 +317,31 @@ fn get_session(app: AppHandle) -> Session {
 #[tauri::command]
 fn list_processes(app: AppHandle) -> Vec<ProcGroup> {
     scan(&read_json::<Config>(&app, "config.json"))
+}
+
+#[tauri::command]
+fn list_monitors(app: AppHandle) -> Result<Vec<overlay::MonitorInfo>, String> {
+    overlay::list_monitors(&app)
+}
+
+#[tauri::command]
+fn get_metrics(app: AppHandle) -> metrics::Metrics {
+    let cfg = read_json::<Config>(&app, "config.json");
+    overlay::get_metrics(&app, &cfg.overlay)
+}
+
+#[tauri::command]
+fn get_overlay_config(app: AppHandle) -> OverlayConfig {
+    read_json::<Config>(&app, "config.json").overlay
+}
+
+#[tauri::command]
+fn toggle_overlay_visibility(app: AppHandle) -> OverlayConfig {
+    let mut cfg = read_json::<Config>(&app, "config.json");
+    overlay::toggle_hidden(&mut cfg.overlay);
+    write_json(&app, "config.json", &cfg);
+    sync_from_config(&app, &cfg);
+    cfg.overlay
 }
 
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
@@ -329,13 +412,20 @@ fn activate(app: AppHandle) -> Result<Session, String> {
     }
 
     write_json(&app, "session.json", &session);
-    dock_to_taskbar(&app);
+    overlay::sync_overlay(&app, &cfg.overlay, true);
+    let _ = app.emit("overlay-config", &cfg.overlay);
+    if cfg.minimize_on_activate {
+        dock_to_taskbar(&app);
+    }
     Ok(session)
 }
 
 #[tauri::command]
 fn restore(app: AppHandle) -> Result<Session, String> {
     let empty = restore_session(&app);
+    let cfg = read_json::<Config>(&app, "config.json");
+    overlay::sync_overlay(&app, &cfg.overlay, false);
+    let _ = app.emit("overlay-config", &cfg.overlay);
     show_main(&app);
     Ok(empty)
 }
@@ -377,19 +467,27 @@ fn dock_to_taskbar(app: &AppHandle) {
 
 fn quit_app(app: &AppHandle) {
     let _ = restore_session(app);
+    if let Some(w) = app.get_webview_window("overlay") {
+        let _ = w.hide();
+    }
     app.exit(0);
 }
 
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Ouvrir", true, None::<&str>)?;
+    let overlay_toggle =
+        MenuItem::with_id(app, "overlay", "Afficher / masquer l'overlay", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &overlay_toggle, &quit])?;
     let mut tray = TrayIconBuilder::new()
         .tooltip("Mode Jeu")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main(app),
+            "overlay" => {
+                let _ = toggle_overlay_visibility(app.clone());
+            }
             "quit" => quit_app(app),
             _ => {}
         })
@@ -419,10 +517,17 @@ pub fn run_app() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
             setup_tray(app.handle())?;
+            let cfg = read_json::<Config>(app.handle(), "config.json");
+            sync_from_config(app.handle(), &cfg);
             Ok(())
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "overlay" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    return;
+                }
                 api.prevent_close();
                 let _ = window.minimize();
             }
@@ -432,6 +537,10 @@ pub fn run_app() {
             save_config,
             get_session,
             list_processes,
+            list_monitors,
+            get_metrics,
+            get_overlay_config,
+            toggle_overlay_visibility,
             activate,
             restore
         ])
