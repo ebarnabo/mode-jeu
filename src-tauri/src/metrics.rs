@@ -1,4 +1,6 @@
+//! Métriques légères : échantillonnage en arrière-plan, zéro spawn coûteux en hot path.
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use sysinfo::{Components, CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
@@ -18,7 +20,15 @@ pub struct Metrics {
     pub fps: Option<f32>,
 }
 
-struct Cache {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GpuKind {
+    Unknown,
+    Nvidia,
+    Amd,
+    None,
+}
+
+struct Sampler {
     sys: System,
     components: Components,
     last_cpu: Instant,
@@ -29,32 +39,49 @@ struct Cache {
     gpu_temp: Option<f32>,
     cpu_temp: Option<f32>,
     fps: Option<f32>,
+    gpu_kind: GpuKind,
+    rtss_ok: bool,
+    rtss_checked_at: Instant,
+    nvidia_misses: u8,
 }
 
-impl Cache {
+impl Sampler {
     fn new() -> Self {
         let mut sys = System::new_with_specifics(
             RefreshKind::new()
                 .with_cpu(CpuRefreshKind::everything())
                 .with_memory(MemoryRefreshKind::everything()),
         );
-        sys.refresh_cpu_all();
+        sys.refresh_cpu_usage();
         Self {
             sys,
             components: Components::new_with_refreshed_list(),
             last_cpu: Instant::now() - Duration::from_secs(2),
-            last_gpu: Instant::now() - Duration::from_secs(5),
-            last_temp: Instant::now() - Duration::from_secs(5),
-            last_fps: Instant::now() - Duration::from_secs(2),
+            last_gpu: Instant::now() - Duration::from_secs(10),
+            last_temp: Instant::now() - Duration::from_secs(10),
+            last_fps: Instant::now() - Duration::from_secs(5),
             gpu_pct: None,
             gpu_temp: None,
             cpu_temp: None,
             fps: None,
+            gpu_kind: GpuKind::Unknown,
+            rtss_ok: false,
+            rtss_checked_at: Instant::now() - Duration::from_secs(60),
+            nvidia_misses: 0,
         }
     }
 }
 
-static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
+static LATEST: Mutex<Metrics> = Mutex::new(Metrics {
+    cpu_pct: 0.0,
+    ram_pct: 0.0,
+    gpu_pct: None,
+    cpu_temp_c: None,
+    gpu_temp_c: None,
+    fps: None,
+});
+static MONITOR: Mutex<Option<MonitorRect>> = Mutex::new(None);
+static STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
 pub struct MonitorRect {
@@ -64,52 +91,80 @@ pub struct MonitorRect {
     pub height: i32,
 }
 
+/// Retourne immédiatement le dernier snapshot ; lance le sampler une seule fois.
 pub fn collect(game_monitor: Option<MonitorRect>) -> Metrics {
-    let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    if guard.is_none() {
-        *guard = Some(Cache::new());
+    if let Ok(mut g) = MONITOR.lock() {
+        *g = game_monitor;
     }
-    let cache = guard.as_mut().unwrap();
+    ensure_sampler();
+    LATEST
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+fn ensure_sampler() {
+    if STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("metrics-sampler".into())
+        .spawn(|| {
+            let mut s = Sampler::new();
+            // Premier tick immédiat.
+            tick(&mut s);
+            loop {
+                std::thread::sleep(Duration::from_millis(1000));
+                tick(&mut s);
+            }
+        })
+        .ok();
+}
+
+fn tick(s: &mut Sampler) {
     let now = Instant::now();
+    let mon = MONITOR.lock().ok().and_then(|g| *g);
 
-    if now.duration_since(cache.last_cpu) >= Duration::from_millis(400) {
-        cache.sys.refresh_cpu_usage();
-        cache.sys.refresh_memory();
-        cache.last_cpu = now;
+    if now.duration_since(s.last_cpu) >= Duration::from_millis(900) {
+        s.sys.refresh_cpu_usage();
+        s.sys.refresh_memory();
+        s.last_cpu = now;
     }
 
-    if now.duration_since(cache.last_gpu) >= Duration::from_secs(2) {
-        let (util, temp) = query_gpu();
-        cache.gpu_pct = util;
-        cache.gpu_temp = temp;
-        cache.last_gpu = now;
+    if now.duration_since(s.last_gpu) >= Duration::from_secs(2) {
+        let (util, temp) = query_gpu(s);
+        s.gpu_pct = util;
+        s.gpu_temp = temp;
+        s.last_gpu = now;
     }
 
-    if now.duration_since(cache.last_temp) >= Duration::from_secs(3) {
-        cache.components.refresh();
-        cache.cpu_temp = cpu_temp_from_components(&cache.components).or_else(query_cpu_temp_wmi);
-        cache.last_temp = now;
+    if now.duration_since(s.last_temp) >= Duration::from_secs(4) {
+        s.components.refresh();
+        s.cpu_temp = cpu_temp_from_components(&s.components);
+        s.last_temp = now;
     }
 
-    if now.duration_since(cache.last_fps) >= Duration::from_millis(800) {
-        cache.fps = query_fps(game_monitor);
-        cache.last_fps = now;
+    if now.duration_since(s.last_fps) >= Duration::from_millis(1200) {
+        s.fps = query_fps(s, mon);
+        s.last_fps = now;
     }
 
-    let cpu_pct = cache.sys.global_cpu_usage();
-    let ram_pct = if cache.sys.total_memory() > 0 {
-        (cache.sys.used_memory() as f32 / cache.sys.total_memory() as f32) * 100.0
+    let cpu_pct = s.sys.global_cpu_usage();
+    let ram_pct = if s.sys.total_memory() > 0 {
+        (s.sys.used_memory() as f32 / s.sys.total_memory() as f32) * 100.0
     } else {
         0.0
     };
 
-    Metrics {
-        cpu_pct,
-        ram_pct,
-        gpu_pct: cache.gpu_pct,
-        cpu_temp_c: cache.cpu_temp,
-        gpu_temp_c: cache.gpu_temp,
-        fps: cache.fps,
+    if let Ok(mut latest) = LATEST.lock() {
+        *latest = Metrics {
+            cpu_pct,
+            ram_pct,
+            gpu_pct: s.gpu_pct,
+            cpu_temp_c: s.cpu_temp,
+            gpu_temp_c: s.gpu_temp,
+            fps: s.fps,
+        };
     }
 }
 
@@ -125,7 +180,6 @@ fn cpu_temp_from_components(components: &Components) -> Option<f32> {
             || label.contains("package")
             || label.contains("tdie")
             || label.contains("tctl")
-            || label.contains("computer")
             || label.contains("acpi")
         {
             return Some(t);
@@ -135,56 +189,61 @@ fn cpu_temp_from_components(components: &Components) -> Option<f32> {
     best
 }
 
-fn normalize_temp(raw: f32) -> Option<f32> {
-    if !raw.is_finite() {
-        return None;
-    }
-    // Kelvin * 10 (ex: 3182 → 45 °C)
-    if raw > 200.0 {
-        let c = raw / 10.0 - 273.15;
-        return (1.0..=110.0).contains(&c).then_some(c);
-    }
-    (1.0..=110.0).contains(&raw).then_some(raw)
-}
-
-fn query_cpu_temp_wmi() -> Option<f32> {
-    // Pas besoin d'admin (contrairement à MSAcpi_*).
-    let script = r#"
-$ErrorActionPreference='SilentlyContinue'
-$vals = @()
-Get-CimInstance Win32_PerfFormattedData_Counters_ThermalZoneInformation | ForEach-Object {
-  if ($null -ne $_.HighPrecisionTemperature -and $_.HighPrecisionTemperature -gt 0) {
-    $vals += [double]$_.HighPrecisionTemperature
-  } elseif ($null -ne $_.Temperature -and $_.Temperature -gt 0) {
-    $vals += [double]$_.Temperature
-  }
-}
-if ($vals.Count -gt 0) { ($vals | Measure-Object -Maximum).Maximum }
-"#;
-    let out = run_hidden(
-        "powershell",
-        &["-NoProfile", "-NonInteractive", "-Command", script],
-    )?;
-    let raw = out.lines().find_map(|l| l.trim().parse::<f32>().ok())?;
-    normalize_temp(raw)
-}
-
-fn query_gpu() -> (Option<f32>, Option<f32>) {
-    let nvidia = query_gpu_nvidia();
-    if nvidia.0.is_some() || nvidia.1.is_some() {
-        return nvidia;
+fn query_gpu(s: &mut Sampler) -> (Option<f32>, Option<f32>) {
+    match s.gpu_kind {
+        GpuKind::Nvidia => {
+            let r = query_gpu_nvidia();
+            if r.0.is_none() && r.1.is_none() {
+                s.nvidia_misses = s.nvidia_misses.saturating_add(1);
+                if s.nvidia_misses >= 3 {
+                    s.gpu_kind = detect_gpu_fallback();
+                }
+            } else {
+                s.nvidia_misses = 0;
+            }
+            return r;
+        }
+        GpuKind::Amd => {
+            #[cfg(windows)]
+            {
+                return crate::amd_adl::query_amd_gpu();
+            }
+            #[cfg(not(windows))]
+            {
+                return (None, None);
+            }
+        }
+        GpuKind::None => return (None, None),
+        GpuKind::Unknown => {}
     }
 
+    // Détection unique (ordre : AMD DLL → nvidia-smi une fois).
     #[cfg(windows)]
     {
-        let amd = crate::amd_adl::query_amd_gpu();
-        if amd.0.is_some() || amd.1.is_some() {
-            let util = amd.0.or_else(query_gpu_util_windows);
-            return (util, amd.1);
+        if crate::amd_adl::available() {
+            s.gpu_kind = GpuKind::Amd;
+            return crate::amd_adl::query_amd_gpu();
         }
     }
 
-    (query_gpu_util_windows(), None)
+    let nvidia = query_gpu_nvidia();
+    if nvidia.0.is_some() || nvidia.1.is_some() {
+        s.gpu_kind = GpuKind::Nvidia;
+        return nvidia;
+    }
+
+    s.gpu_kind = GpuKind::None;
+    (None, None)
+}
+
+fn detect_gpu_fallback() -> GpuKind {
+    #[cfg(windows)]
+    {
+        if crate::amd_adl::available() {
+            return GpuKind::Amd;
+        }
+    }
+    GpuKind::None
 }
 
 fn query_gpu_nvidia() -> (Option<f32>, Option<f32>) {
@@ -206,28 +265,6 @@ fn query_gpu_nvidia() -> (Option<f32>, Option<f32>) {
     (None, None)
 }
 
-fn query_gpu_util_windows() -> Option<f32> {
-    let out = run_hidden(
-        "typeperf",
-        &[r"\GPU Engine(*engtype_3D)\Utilization Percentage", "-sc", "1"],
-    )?;
-    let mut max_v = 0f32;
-    let mut found = false;
-    for line in out.lines() {
-        // CSV: "timestamp","value"
-        for part in line.split(',') {
-            let p = part.trim().trim_matches('"');
-            if let Ok(v) = p.parse::<f32>() {
-                if (0.0..=100.0).contains(&v) {
-                    max_v = max_v.max(v);
-                    found = true;
-                }
-            }
-        }
-    }
-    found.then_some(max_v)
-}
-
 fn run_hidden(cmd: &str, args: &[&str]) -> Option<String> {
     let mut c = std::process::Command::new(cmd);
     c.args(args);
@@ -239,16 +276,58 @@ fn run_hidden(cmd: &str, args: &[&str]) -> Option<String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
 }
 
-fn query_fps(game_monitor: Option<MonitorRect>) -> Option<f32> {
+fn query_fps(s: &mut Sampler, game_monitor: Option<MonitorRect>) -> Option<f32> {
     #[cfg(windows)]
     {
+        let now = Instant::now();
+        // Si RTSS absent, ne pas rescanner la mémoire partagée toutes les secondes.
+        if !s.rtss_ok && now.duration_since(s.rtss_checked_at) < Duration::from_secs(20) {
+            return None;
+        }
+        s.rtss_checked_at = now;
+
         let pid = game_monitor.and_then(top_window_pid_on_monitor);
-        if let Some(fps) = read_rtss_fps(pid) {
-            return Some(fps);
+        match read_rtss_fps(pid) {
+            Some(fps) => {
+                s.rtss_ok = true;
+                return Some(fps);
+            }
+            None => {
+                // Mapping introuvable → RTSS off.
+                if !rtss_mapping_exists() {
+                    s.rtss_ok = false;
+                    return None;
+                }
+                s.rtss_ok = true;
+                return None;
+            }
         }
     }
-    let _ = game_monitor;
-    None
+    #[cfg(not(windows))]
+    {
+        let _ = (s, game_monitor);
+        None
+    }
+}
+
+#[cfg(windows)]
+fn rtss_mapping_exists() -> bool {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Memory::{OpenFileMappingW, FILE_MAP_READ};
+    unsafe {
+        match OpenFileMappingW(
+            FILE_MAP_READ.0,
+            false,
+            &HSTRING::from("RTSSSharedMemory_V2"),
+        ) {
+            Ok(h) => {
+                let _ = CloseHandle(h);
+                true
+            }
+            Err(_) => false,
+        }
+    }
 }
 
 #[cfg(windows)]

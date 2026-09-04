@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use sysinfo::{ProcessesToUpdate, System};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -208,50 +210,98 @@ fn foreground_pid() -> Option<u32> {
     None
 }
 
-fn scan(cfg: &Config) -> Vec<ProcGroup> {
-    let mut sys = System::new();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    let fg = foreground_pid();
-    let self_pid = std::process::id();
-    let mut map: HashMap<String, ProcGroup> = HashMap::new();
+static PROC_SYS: Mutex<Option<System>> = Mutex::new(None);
 
-    for (pid, proc_) in sys.processes() {
-        let name = proc_.name().to_string_lossy().to_string();
-        let key = name.to_lowercase();
-        if key.is_empty() || pid.as_u32() == self_pid {
-            continue;
+fn with_proc_sys<R>(f: impl FnOnce(&mut System) -> R) -> R {
+    let mut guard = PROC_SYS.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_none() {
+        *guard = Some(System::new());
+    }
+    f(guard.as_mut().unwrap())
+}
+
+fn scan(cfg: &Config) -> Vec<ProcGroup> {
+    with_proc_sys(|sys| {
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+
+        let fg = foreground_pid();
+        let self_pid = std::process::id();
+        let mut map: HashMap<String, ProcGroup> = HashMap::new();
+
+        for (pid, proc_) in sys.processes() {
+            let name = proc_.name().to_string_lossy().to_string();
+            let key = name.to_lowercase();
+            if key.is_empty() || pid.as_u32() == self_pid {
+                continue;
+            }
+            let path = proc_.exe().map(|p| p.to_string_lossy().to_string());
+            let protected =
+                is_critical(&key) || is_safe_by_default(&key, &path) || !is_candidate(&path);
+            let entry = map.entry(key.clone()).or_insert_with(|| ProcGroup {
+                key: key.clone(),
+                name: name.trim_end_matches(".exe").to_string(),
+                memory_mb: 0,
+                instances: 0,
+                path: path.clone(),
+                protected,
+                kept: cfg.keep.contains(&key),
+                foreground: false,
+            });
+            entry.memory_mb += proc_.memory() / 1_048_576;
+            entry.instances += 1;
+            if entry.path.is_none() {
+                entry.path = path;
+            }
+            if Some(pid.as_u32()) == fg {
+                entry.foreground = true;
+            }
         }
-        let path = proc_.exe().map(|p| p.to_string_lossy().to_string());
-        let protected =
-            is_critical(&key) || is_safe_by_default(&key, &path) || !is_candidate(&path);
-        let entry = map.entry(key.clone()).or_insert_with(|| ProcGroup {
-            key: key.clone(),
-            name: name.trim_end_matches(".exe").to_string(),
-            memory_mb: 0,
-            instances: 0,
-            path: path.clone(),
-            protected,
-            kept: cfg.keep.contains(&key),
-            foreground: false,
+
+        let mut v: Vec<ProcGroup> = map.into_values().filter(|p| p.memory_mb > 0).collect();
+        v.sort_by(|a, b| {
+            b.protected
+                .cmp(&a.protected)
+                .reverse()
+                .then(b.memory_mb.cmp(&a.memory_mb))
         });
-        entry.memory_mb += proc_.memory() / 1_048_576;
-        entry.instances += 1;
-        if entry.path.is_none() {
-            entry.path = path;
-        }
-        if Some(pid.as_u32()) == fg {
-            entry.foreground = true;
+        v
+    })
+}
+
+struct ProcCache {
+    at: Instant,
+    keep_sig: u64,
+    groups: Vec<ProcGroup>,
+}
+
+static PROC_CACHE: Mutex<Option<ProcCache>> = Mutex::new(None);
+
+fn keep_signature(keep: &[String]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    keep.hash(&mut h);
+    h.finish()
+}
+
+fn list_processes_cached(cfg: &Config) -> Vec<ProcGroup> {
+    let sig = keep_signature(&cfg.keep);
+    if let Ok(guard) = PROC_CACHE.lock() {
+        if let Some(c) = guard.as_ref() {
+            if c.keep_sig == sig && c.at.elapsed() < Duration::from_secs(3) {
+                return c.groups.clone();
+            }
         }
     }
-
-    let mut v: Vec<ProcGroup> = map.into_values().filter(|p| p.memory_mb > 0).collect();
-    v.sort_by(|a, b| {
-        b.protected
-            .cmp(&a.protected)
-            .reverse()
-            .then(b.memory_mb.cmp(&a.memory_mb))
-    });
-    v
+    let groups = scan(cfg);
+    if let Ok(mut guard) = PROC_CACHE.lock() {
+        *guard = Some(ProcCache {
+            at: Instant::now(),
+            keep_sig: sig,
+            groups: groups.clone(),
+        });
+    }
+    groups
 }
 
 fn apply_startup(enabled: bool) {
@@ -318,7 +368,7 @@ fn get_session(app: AppHandle) -> Session {
 
 #[tauri::command]
 fn list_processes(app: AppHandle) -> Vec<ProcGroup> {
-    scan(&read_json::<Config>(&app, "config.json"))
+    list_processes_cached(&read_json::<Config>(&app, "config.json"))
 }
 
 #[tauri::command]
@@ -386,23 +436,27 @@ fn activate(app: AppHandle) -> Result<Session, String> {
         })
         .collect();
 
-    let mut sys = System::new();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
+    // Réutilise le snapshot déjà rafraîchi par scan() — pas de 2e scan complet.
+    with_proc_sys(|sys| {
+        for g in &targets {
+            let mut killed = false;
+            for (_, p) in sys.processes() {
+                if p.name().to_string_lossy().to_lowercase() == g.key && p.kill() {
+                    killed = true;
+                }
+            }
+            if killed {
+                session.freed_mb += g.memory_mb;
+                session.closed_names.push(g.name.clone());
+                if let Some(path) = &g.path {
+                    session.closed.push(path.clone());
+                }
+            }
+        }
+    });
 
-    for g in targets {
-        let mut killed = false;
-        for (_, p) in sys.processes() {
-            if p.name().to_string_lossy().to_lowercase() == g.key && p.kill() {
-                killed = true;
-            }
-        }
-        if killed {
-            session.freed_mb += g.memory_mb;
-            session.closed_names.push(g.name.clone());
-            if let Some(path) = &g.path {
-                session.closed.push(path.clone());
-            }
-        }
+    if let Ok(mut guard) = PROC_CACHE.lock() {
+        *guard = None;
     }
 
     if cfg.stop_services {

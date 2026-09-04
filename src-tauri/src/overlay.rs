@@ -1,12 +1,14 @@
 use crate::metrics::{self, Metrics, MonitorRect};
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 fn default_true() -> bool {
     true
 }
 fn default_interval() -> u32 {
-    1000
+    2000
 }
 fn default_opacity() -> u8 {
     88
@@ -61,7 +63,7 @@ impl Default for OverlayConfig {
             show_ram: true,
             opacity: 88,
             position: "top-right".into(),
-            interval_ms: 1000,
+            interval_ms: 2000,
             hidden: false,
         }
     }
@@ -113,17 +115,42 @@ pub fn list_monitors(app: &AppHandle) -> Result<Vec<MonitorInfo>, String> {
         .collect())
 }
 
+struct RectCache {
+    at: Instant,
+    key: Option<String>,
+    rect: Option<MonitorRect>,
+}
+
+static GAME_RECT_CACHE: Mutex<Option<RectCache>> = Mutex::new(None);
+
 pub fn resolve_game_rect(app: &AppHandle, cfg: &OverlayConfig) -> Option<MonitorRect> {
+    let key = cfg.game_monitor_name.clone();
+    if let Ok(guard) = GAME_RECT_CACHE.lock() {
+        if let Some(c) = guard.as_ref() {
+            if c.key == key && c.at.elapsed() < Duration::from_secs(15) {
+                return c.rect;
+            }
+        }
+    }
+
     let monitors = list_monitors(app).ok()?;
-    let m = pick_monitor(&monitors, cfg.game_monitor_name.as_deref())
+    let m = pick_monitor(&monitors, key.as_deref())
         .or_else(|| monitors.iter().find(|m| m.is_primary))
         .or_else(|| monitors.first())?;
-    Some(MonitorRect {
+    let rect = MonitorRect {
         x: m.x,
         y: m.y,
         width: m.width as i32,
         height: m.height as i32,
-    })
+    };
+    if let Ok(mut guard) = GAME_RECT_CACHE.lock() {
+        *guard = Some(RectCache {
+            at: Instant::now(),
+            key,
+            rect: Some(rect),
+        });
+    }
+    Some(rect)
 }
 
 pub fn get_metrics(app: &AppHandle, cfg: &OverlayConfig) -> Metrics {

@@ -97,11 +97,18 @@ export default function App() {
 
   useEffect(() => {
     refresh();
-    const id = setInterval(() => {
-      if (!busy) invoke<ProcGroup[]>("list_processes").then(setProcs).catch(() => {});
-    }, 5000);
+  }, [refresh]);
+
+  // Liste processus seulement sur l'onglet Apps (pas en boucle partout).
+  useEffect(() => {
+    if (tab !== "apps" || busy) return;
+    const tick = () => {
+      invoke<ProcGroup[]>("list_processes").then(setProcs).catch(() => {});
+    };
+    tick();
+    const id = setInterval(tick, 10000);
     return () => clearInterval(id);
-  }, [refresh, busy]);
+  }, [tab, busy]);
 
   const patch = async (next: Partial<Config>) => {
     if (!config) return;
@@ -456,9 +463,9 @@ export default function App() {
                   </p>
                   <div className="flex gap-2">
                     {[
-                      [500, "0,5s"],
                       [1000, "1s"],
                       [2000, "2s"],
+                      [3000, "3s"],
                     ].map(([ms, label]) => (
                       <button
                         key={ms}

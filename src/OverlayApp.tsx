@@ -46,6 +46,7 @@ export default function OverlayApp() {
     if (!cfg) return;
     let alive = true;
     const tick = async () => {
+      if (document.hidden) return;
       try {
         const m = await invoke<Metrics>("get_metrics");
         if (alive) setMetrics(m);
@@ -54,10 +55,15 @@ export default function OverlayApp() {
       }
     };
     tick();
-    const id = window.setInterval(tick, Math.max(500, cfg.interval_ms || 1000));
+    const id = window.setInterval(tick, Math.max(1000, cfg.interval_ms || 2000));
+    const onVis = () => {
+      if (!document.hidden) void tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
     return () => {
       alive = false;
       window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
     };
   }, [cfg?.interval_ms]);
 
