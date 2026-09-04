@@ -1,0 +1,7 @@
+{
+  "framework": "vite",
+  "files": ["index.html"],
+  "insertBefore": "<div id=\"root\"></div>",
+  "commentSyntax": "html",
+  "cspChecked": true
+}

@@ -12,6 +12,7 @@ import {
   Zap,
 } from "lucide-react";
 import { UpdateBar, UpdateProvider, UpdatesPanel } from "@/components/UpdateBar";
+import { PowerIgnition } from "@/components/PowerIgnition";
 import { MonitorPicker, type MonitorInfo } from "@/components/MonitorPicker";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -60,6 +61,7 @@ type Config = {
   disable_notifications: boolean;
   visual_effects_perf: boolean;
   disable_transparency: boolean;
+  reopen_closed_apps: boolean;
   overlay: OverlayConfig;
 };
 
@@ -90,6 +92,10 @@ export default function App() {
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [appSort, setAppSort] = useState<AppSort>("ram");
+  const [ignition, setIgnition] = useState<{
+    freedMb: number;
+    appsClosed: number;
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     const [c, s, p, m] = await Promise.all([
@@ -137,11 +143,20 @@ export default function App() {
     patch({ keep: keep ? [...config.keep, key] : config.keep.filter((k) => k !== key) });
   };
 
+  const clearIgnition = useCallback(() => setIgnition(null), []);
+
   const run = async (cmd: "activate" | "restore") => {
     setBusy(true);
     try {
-      setSession(await invoke<Session>(cmd));
+      const next = await invoke<Session>(cmd);
+      setSession(next);
       setProcs(await invoke<ProcGroup[]>("list_processes"));
+      if (cmd === "activate") {
+        setIgnition({
+          freedMb: next.freed_mb,
+          appsClosed: next.closed_names.length,
+        });
+      }
     } finally {
       setBusy(false);
     }
@@ -183,6 +198,12 @@ export default function App() {
       }}
     >
     <div className="app-shell relative flex h-full flex-col overflow-hidden">
+      <PowerIgnition
+        open={!!ignition}
+        freedMb={ignition?.freedMb ?? 0}
+        appsClosed={ignition?.appsClosed ?? 0}
+        onDone={clearIgnition}
+      />
       <header
         data-tauri-drag-region
         className="relative z-10 flex items-start justify-between gap-4 px-7 pb-4 pt-7"
@@ -565,6 +586,12 @@ export default function App() {
                   hint="Lancement à la connexion."
                   checked={config.start_with_windows}
                   onChange={(v) => patch({ start_with_windows: v })}
+                />
+                <OptionRow
+                  label="Rouvrir les apps à la sortie"
+                  hint="Sinon seules les tweaks système sont restaurées."
+                  checked={config.reopen_closed_apps}
+                  onChange={(v) => patch({ reopen_closed_apps: v })}
                   last
                 />
               </div>

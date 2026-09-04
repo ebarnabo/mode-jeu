@@ -113,6 +113,9 @@ pub struct Config {
     pub visual_effects_perf: bool,
     #[serde(default)]
     pub disable_transparency: bool,
+    /// Si false, les apps fermées ne sont pas relancées à la sortie du mode jeu.
+    #[serde(default = "default_true")]
+    pub reopen_closed_apps: bool,
     #[serde(default)]
     pub overlay: OverlayConfig,
 }
@@ -145,6 +148,7 @@ impl Default for Config {
             disable_notifications: false,
             visual_effects_perf: false,
             disable_transparency: false,
+            reopen_closed_apps: true,
             overlay: OverlayConfig::default(),
         }
     }
@@ -511,12 +515,15 @@ fn restore(app: AppHandle) -> Result<Session, String> {
 
 fn restore_session(app: &AppHandle) -> Session {
     let session = read_json::<Session>(app, "session.json");
+    let cfg = read_json::<Config>(app, "config.json");
 
-    for path in &session.closed {
-        let mut c = Command::new(path);
-        #[cfg(windows)]
-        c.creation_flags(NO_WINDOW);
-        let _ = c.spawn();
+    if cfg.reopen_closed_apps {
+        for path in &session.closed {
+            let mut c = Command::new(path);
+            #[cfg(windows)]
+            c.creation_flags(NO_WINDOW);
+            let _ = c.spawn();
+        }
     }
 
     // Nouveau chemin (snapshot tweaks) + rétrocompat anciennes sessions.
