@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Gamepad2, Lock, Search, RotateCcw, Loader2, Shield } from "lucide-react";
+import {
+  Gamepad2,
+  Lock,
+  Search,
+  RotateCcw,
+  Loader2,
+  Shield,
+  Monitor,
+  Settings2,
+  Zap,
+} from "lucide-react";
 import { UpdateBar } from "@/components/UpdateBar";
 import { MonitorPicker, type MonitorInfo } from "@/components/MonitorPicker";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 type ProcGroup = {
@@ -55,12 +63,22 @@ type Session = {
   freed_mb: number;
 };
 
+type Tab = "session" | "apps" | "overlay" | "options";
+
+const TABS: { id: Tab; label: string; icon: typeof Zap }[] = [
+  { id: "session", label: "Session", icon: Zap },
+  { id: "apps", label: "Apps", icon: Shield },
+  { id: "overlay", label: "Overlay", icon: Monitor },
+  { id: "options", label: "Options", icon: Settings2 },
+];
+
 export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [procs, setProcs] = useState<ProcGroup[]>([]);
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   const [monitorMode, setMonitorMode] = useState<"overlay" | "game">("overlay");
+  const [tab, setTab] = useState<Tab>("session");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -129,36 +147,41 @@ export default function App() {
 
   if (!config) {
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="flex h-full items-center justify-center bg-ink">
         <Loader2 className="h-5 w-5 animate-spin text-muted" />
       </div>
     );
   }
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden">
+    <div className="app-shell relative flex h-full flex-col overflow-hidden">
       <header
         data-tauri-drag-region
-        className="flex items-center justify-between gap-4 px-8 pb-6 pt-8"
+        className="relative z-10 flex items-start justify-between gap-4 px-7 pb-4 pt-7"
       >
         <div>
-          <h1 className="text-[22px] font-extrabold tracking-tight">Mode Jeu</h1>
-          <p className="mt-1 text-[13px] text-muted">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-brass/80">
+            Mode Jeu
+          </p>
+          <h1 className="mt-1 font-display text-[28px] font-semibold leading-none tracking-tight text-paper">
+            {active ? "Session active" : "Prêt à jouer"}
+          </h1>
+          <p className="mt-2 text-[13px] text-muted">
             {active
-              ? `${session?.closed_names.length ?? 0} applications mises en pause`
-              : "Prêt à libérer de la mémoire"}
+              ? `${session?.closed_names.length ?? 0} apps en pause · ${session!.freed_mb} Mo libérés`
+              : `${closable} apps · ${reclaimable} Mo récupérables`}
           </p>
         </div>
         <div
           className={cn(
-            "flex h-11 items-center justify-center gap-2 rounded-2xl border px-4 text-[13px] font-semibold transition-colors duration-300",
+            "mt-1 flex h-9 items-center gap-2 rounded-full border px-3 text-[12px] font-semibold",
             active
-              ? "border-jade/30 bg-jade/10 text-jade"
-              : "border-line bg-surface text-muted"
+              ? "border-jade/35 bg-jade/10 text-jade"
+              : "border-line bg-surface/80 text-muted"
           )}
         >
-          <span className={cn("h-2 w-2 rounded-full", active ? "bg-jade" : "bg-muted/50")} />
-          {active ? "Actif" : "En veille"}
+          <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-jade" : "bg-muted/60")} />
+          {active ? "Actif" : "Veille"}
         </div>
       </header>
 
@@ -169,283 +192,345 @@ export default function App() {
         }}
       />
 
-      <main className="scroll-area flex-1 overflow-y-auto px-8" style={{ paddingBottom: 140 }}>
-        <section className="animate-rise rounded-3xl border border-line bg-gradient-to-b from-raised to-surface p-8">
-          <div className="flex flex-wrap items-end gap-x-16 gap-y-8">
-            <div>
-              <div className="flex items-baseline gap-2">
-                <span className="text-[56px] font-extrabold leading-none tracking-tighter text-brass">
-                  {active ? session!.freed_mb : reclaimable}
-                </span>
-                <span className="text-lg font-semibold text-muted">Mo</span>
-              </div>
-              <p className="mt-3 text-[13px] text-muted">
-                {active ? "Mémoire libérée" : "Mémoire récupérable"}
-              </p>
-            </div>
-            <div>
-              <div className="text-[56px] font-extrabold leading-none tracking-tighter text-paper">
-                {active ? session!.closed_names.length : closable}
-              </div>
-              <p className="mt-3 text-[13px] text-muted">
-                {active ? "Applications fermées" : "Applications à fermer"}
-              </p>
-            </div>
-          </div>
-        </section>
+      <nav className="relative z-10 mx-7 mb-5 flex gap-1 rounded-2xl border border-line bg-surface/70 p-1 backdrop-blur-sm">
+        {TABS.map(({ id, label, icon: Icon }) => {
+          const on = tab === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              className={cn(
+                "flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-[13px] font-semibold transition-colors",
+                on
+                  ? "bg-raised text-paper shadow-[inset_0_0_0_1px_rgba(214,166,74,0.28)]"
+                  : "text-muted hover:text-paper"
+              )}
+            >
+              <Icon className={cn("h-3.5 w-3.5", on ? "text-brass" : "")} />
+              <span className="hidden sm:inline">{label}</span>
+            </button>
+          );
+        })}
+      </nav>
 
-        <Card className="mt-6">
-          <CardHeader>
-            <CardTitle>Réglages</CardTitle>
-            <CardDescription>
-              Options utiles pour une session de jeu propre et prévisible.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-6">
-            <Setting
-              label="Basculer sur le plan Performances élevées"
-              hint="Le plan précédent est restauré à la sortie."
-              checked={config.high_performance}
-              onChange={(v) => patch({ high_performance: v })}
-            />
-            <Setting
-              label="Protéger la fenêtre au premier plan"
-              hint="Le jeu déjà lancé ne sera jamais fermé, même hors de ta liste."
-              checked={config.protect_foreground}
-              onChange={(v) => patch({ protect_foreground: v })}
-            />
-            <Setting
-              label="Réduire dans la barre des tâches à l'activation"
-              hint="Laisse la place au jeu dès que le mode est lancé."
-              checked={config.minimize_on_activate}
-              onChange={(v) => patch({ minimize_on_activate: v })}
-            />
-            <Setting
-              label="Démarrer avec Windows"
-              hint="Mode Jeu s'ouvre à la connexion de ta session."
-              checked={config.start_with_windows}
-              onChange={(v) => patch({ start_with_windows: v })}
-            />
-            <Setting
-              label={`Arrêter les services ${config.services.join(", ")}`}
-              hint="Nécessite de lancer Mode Jeu en administrateur."
-              checked={config.stop_services}
-              onChange={(v) => patch({ stop_services: v })}
-            />
-          </CardContent>
-        </Card>
-
-        <Card className="mt-6">
-          <CardHeader>
-            <CardTitle>Overlay performances</CardTitle>
-            <CardDescription>
-              Affiche CPU, GPU, températures et FPS sur un second écran, avec un coût minimal
-              (~1 lecture / s).
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-6">
-            <Setting
-              label="Activer l'overlay"
-              hint="Apparait pendant le mode jeu (ou toujours, selon l'option suivante)."
-              checked={config.overlay.enabled}
-              onChange={(v) => patchOverlay({ enabled: v, hidden: false })}
-            />
-            <Setting
-              label="Aussi hors mode jeu"
-              hint="Garde le panneau visible même quand le mode jeu est éteint."
-              checked={config.overlay.always}
-              onChange={(v) => patchOverlay({ always: v })}
-            />
-
-            <MonitorPicker
-              monitors={monitors}
-              overlayName={config.overlay.monitor_name}
-              gameName={config.overlay.game_monitor_name}
-              mode={monitorMode}
-              onModeChange={setMonitorMode}
-              onSelect={(name) =>
-                patchOverlay(
-                  monitorMode === "overlay"
-                    ? { monitor_name: name }
-                    : { game_monitor_name: name }
-                )
-              }
-            />
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Setting
-                label="FPS (écran de jeu)"
-                hint="Via RTSS / MSI Afterburner si disponible."
-                checked={config.overlay.show_fps}
-                onChange={(v) => patchOverlay({ show_fps: v })}
-              />
-              <Setting
-                label="CPU"
-                hint="Charge processeur globale."
-                checked={config.overlay.show_cpu}
-                onChange={(v) => patchOverlay({ show_cpu: v })}
-              />
-              <Setting
-                label="GPU"
-                hint="Utilisation NVIDIA (nvidia-smi) si présent."
-                checked={config.overlay.show_gpu}
-                onChange={(v) => patchOverlay({ show_gpu: v })}
-              />
-              <Setting
-                label="Températures"
-                hint="CPU (capteurs) et GPU NVIDIA."
-                checked={config.overlay.show_temps}
-                onChange={(v) => patchOverlay({ show_temps: v })}
-              />
-              <Setting
-                label="RAM"
-                hint="Mémoire utilisée."
-                checked={config.overlay.show_ram}
-                onChange={(v) => patchOverlay({ show_ram: v })}
-              />
-            </div>
-
-            <div className="flex flex-col gap-3">
-              <p className="text-sm font-medium">Position</p>
-              <div className="flex flex-wrap gap-2">
-                {(
-                  [
-                    ["top-left", "Haut gauche"],
-                    ["top-right", "Haut droite"],
-                    ["bottom-left", "Bas gauche"],
-                    ["bottom-right", "Bas droite"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => patchOverlay({ position: value })}
-                    className={cn(
-                      "rounded-xl border px-3 py-2 text-[13px] font-semibold transition-colors",
-                      config.overlay.position === value
-                        ? "border-brass/40 bg-brass/15 text-brass"
-                        : "border-line bg-surface text-muted hover:text-paper"
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
+      <main className="scroll-area relative z-10 flex-1 overflow-y-auto px-7" style={{ paddingBottom: 132 }}>
+        {tab === "session" && (
+          <section className="animate-rise space-y-6">
+            <div className="relative overflow-hidden rounded-[28px] border border-line bg-gradient-to-br from-raised via-surface to-ink p-7">
+              <div className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-brass/10 blur-3xl" />
+              <div className="relative grid gap-8 sm:grid-cols-2">
+                <Stat
+                  value={active ? session!.freed_mb : reclaimable}
+                  unit="Mo"
+                  label={active ? "Mémoire libérée" : "Mémoire récupérable"}
+                  accent
+                />
+                <Stat
+                  value={active ? session!.closed_names.length : closable}
+                  label={active ? "Applications fermées" : "Applications à fermer"}
+                />
               </div>
             </div>
 
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center justify-between gap-4">
-                <p className="text-sm font-medium">Opacité</p>
-                <span className="text-[13px] text-muted">{config.overlay.opacity}%</span>
-              </div>
-              <input
-                type="range"
-                min={40}
-                max={100}
-                value={config.overlay.opacity}
-                onChange={(e) => patchOverlay({ opacity: Number(e.target.value) })}
-                className="w-full accent-[#D6A64A]"
+            <div className="grid gap-3 sm:grid-cols-3">
+              <SummaryChip
+                on={config.high_performance}
+                title="Perf. élevées"
+                detail="Plan d'alimentation"
+              />
+              <SummaryChip
+                on={config.overlay.enabled}
+                title="Overlay"
+                detail={config.overlay.enabled ? "Actif en session" : "Désactivé"}
+                onClick={() => setTab("overlay")}
+              />
+              <SummaryChip
+                on={config.keep.length > 0}
+                title={`${config.keep.length} gardées`}
+                detail="Apps protégées"
+                onClick={() => setTab("apps")}
               />
             </div>
 
-            <div className="flex flex-col gap-3">
-              <p className="text-sm font-medium">Rafraîchissement</p>
-              <div className="flex flex-wrap gap-2">
-                {[
-                  [500, "0,5 s"],
-                  [1000, "1 s"],
-                  [2000, "2 s"],
-                ].map(([ms, label]) => (
-                  <button
-                    key={ms}
-                    type="button"
-                    onClick={() => patchOverlay({ interval_ms: Number(ms) })}
-                    className={cn(
-                      "rounded-xl border px-3 py-2 text-[13px] font-semibold transition-colors",
-                      config.overlay.interval_ms === ms
-                        ? "border-brass/40 bg-brass/15 text-brass"
-                        : "border-line bg-surface text-muted hover:text-paper"
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <p className="text-[13px] text-muted">
-                Plus l'intervalle est long, moins l'overlay consomme. Masquable aussi depuis
-                l'icône tray.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+            <p className="max-w-[42ch] text-[13px] leading-relaxed text-muted">
+              Lance le mode pour fermer le superflu. Les réglages fins sont dans les autres
+              onglets — ici, l'essentiel.
+            </p>
+          </section>
+        )}
 
-        <Card className="mt-6">
-          <CardHeader>
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex flex-col gap-2">
-                <CardTitle>Applications ouvertes</CardTitle>
-                <CardDescription>
-                  Active l'interrupteur pour garder une application ouverte pendant le jeu.
-                </CardDescription>
+        {tab === "apps" && (
+          <section className="animate-rise space-y-4">
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <h2 className="font-display text-lg font-semibold text-paper">Applications</h2>
+                <p className="mt-1 text-[13px] text-muted">
+                  Celles que tu gardes restent ouvertes pendant le jeu.
+                </p>
               </div>
-              <Badge className="gap-1.5">
-                <Shield className="h-3 w-3" />
+              <span className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] font-semibold text-muted">
                 {config.keep.length} gardées
-              </Badge>
+              </span>
             </div>
-            <div className="relative mt-4">
+
+            <div className="relative">
               <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
               <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Rechercher une application"
+                placeholder="Rechercher"
                 className="pl-11"
               />
             </div>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            {visible.length === 0 && (
-              <p className="py-8 text-center text-[13px] text-muted">
-                Aucune application ne correspond à cette recherche.
-              </p>
-            )}
-            {visible.map((p) => (
-              <div
-                key={p.key}
-                className="flex items-center gap-4 rounded-2xl px-4 py-3 transition-colors duration-200 hover:bg-raised"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-sm font-medium">{p.name}</span>
-                    {p.foreground && config.protect_foreground && (
-                      <Badge className="border-brass/30 bg-brass/10 text-brass">
-                        <Lock className="h-3 w-3" />
-                        Au premier plan
-                      </Badge>
+
+            <div className="overflow-hidden rounded-2xl border border-line bg-surface/60">
+              {visible.length === 0 ? (
+                <p className="px-4 py-10 text-center text-[13px] text-muted">
+                  Aucune application ne correspond.
+                </p>
+              ) : (
+                visible.map((p, i) => (
+                  <div
+                    key={p.key}
+                    className={cn(
+                      "flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-raised/70",
+                      i > 0 && "border-t border-line/80"
                     )}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium text-paper">{p.name}</span>
+                        {p.foreground && config.protect_foreground && (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-brass/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brass">
+                            <Lock className="h-2.5 w-2.5" />
+                            Focus
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-xs text-muted">
+                        {p.memory_mb} Mo
+                        {p.instances > 1 && ` · ${p.instances} processus`}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={p.kept}
+                      onCheckedChange={(v) => toggleKeep(p.key, v)}
+                      aria-label={`Garder ${p.name}`}
+                    />
                   </div>
-                  <p className="mt-0.5 text-xs text-muted">
-                    {p.memory_mb} Mo
-                    {p.instances > 1 && ` · ${p.instances} processus`}
-                  </p>
-                </div>
-                <Switch
-                  checked={p.kept}
-                  onCheckedChange={(v) => toggleKeep(p.key, v)}
-                  aria-label={`Garder ${p.name} ouvert`}
-                />
+                ))
+              )}
+            </div>
+          </section>
+        )}
+
+        {tab === "overlay" && (
+          <section className="animate-rise space-y-6">
+            <div>
+              <h2 className="font-display text-lg font-semibold text-paper">Overlay</h2>
+              <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
+                Panneau léger sur un écran, FPS lus sur l'écran de jeu. Une lecture par seconde
+                environ.
+              </p>
+            </div>
+
+            <div className="space-y-4 rounded-2xl border border-line bg-surface/60 p-5">
+              <Setting
+                label="Activer l'overlay"
+                hint="Pendant le mode jeu, ou toujours si tu l'actives ci-dessous."
+                checked={config.overlay.enabled}
+                onChange={(v) => patchOverlay({ enabled: v, hidden: false })}
+              />
+              <Divider />
+              <Setting
+                label="Aussi hors mode jeu"
+                hint="Le panneau reste visible en veille."
+                checked={config.overlay.always}
+                onChange={(v) => patchOverlay({ always: v })}
+              />
+            </div>
+
+            <div className="rounded-2xl border border-line bg-surface/60 p-5">
+              <MonitorPicker
+                monitors={monitors}
+                overlayName={config.overlay.monitor_name}
+                gameName={config.overlay.game_monitor_name}
+                mode={monitorMode}
+                onModeChange={setMonitorMode}
+                onSelect={(name) =>
+                  patchOverlay(
+                    monitorMode === "overlay"
+                      ? { monitor_name: name }
+                      : { game_monitor_name: name }
+                  )
+                }
+              />
+            </div>
+
+            <div>
+              <p className="mb-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-muted">
+                Métriques
+              </p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {(
+                  [
+                    ["show_fps", "FPS", config.overlay.show_fps],
+                    ["show_cpu", "CPU", config.overlay.show_cpu],
+                    ["show_gpu", "GPU", config.overlay.show_gpu],
+                    ["show_temps", "Temp.", config.overlay.show_temps],
+                    ["show_ram", "RAM", config.overlay.show_ram],
+                  ] as const
+                ).map(([key, label, on]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => patchOverlay({ [key]: !on })}
+                    className={cn(
+                      "rounded-xl border px-3 py-3 text-left text-[13px] font-semibold transition-colors",
+                      on
+                        ? "border-brass/35 bg-brass/12 text-brass"
+                        : "border-line bg-surface text-muted hover:text-paper"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
-            ))}
-          </CardContent>
-        </Card>
+            </div>
+
+            <div className="grid gap-5 sm:grid-cols-2">
+              <div className="rounded-2xl border border-line bg-surface/60 p-5">
+                <p className="mb-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-muted">
+                  Coin
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {(
+                    [
+                      ["top-left", "Haut G"],
+                      ["top-right", "Haut D"],
+                      ["bottom-left", "Bas G"],
+                      ["bottom-right", "Bas D"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => patchOverlay({ position: value })}
+                      className={cn(
+                        "rounded-xl border py-2.5 text-[12px] font-semibold transition-colors",
+                        config.overlay.position === value
+                          ? "border-brass/35 bg-brass/12 text-brass"
+                          : "border-line bg-ink/40 text-muted hover:text-paper"
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-5 rounded-2xl border border-line bg-surface/60 p-5">
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-muted">
+                      Opacité
+                    </p>
+                    <span className="font-mono text-[12px] text-paper">
+                      {config.overlay.opacity}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={40}
+                    max={100}
+                    value={config.overlay.opacity}
+                    onChange={(e) => patchOverlay({ opacity: Number(e.target.value) })}
+                    className="w-full accent-[#D6A64A]"
+                  />
+                </div>
+                <div>
+                  <p className="mb-2 text-[12px] font-semibold uppercase tracking-[0.14em] text-muted">
+                    Rafraîchissement
+                  </p>
+                  <div className="flex gap-2">
+                    {[
+                      [500, "0,5s"],
+                      [1000, "1s"],
+                      [2000, "2s"],
+                    ].map(([ms, label]) => (
+                      <button
+                        key={ms}
+                        type="button"
+                        onClick={() => patchOverlay({ interval_ms: Number(ms) })}
+                        className={cn(
+                          "flex-1 rounded-xl border py-2 text-[12px] font-semibold transition-colors",
+                          config.overlay.interval_ms === ms
+                            ? "border-brass/35 bg-brass/12 text-brass"
+                            : "border-line bg-ink/40 text-muted hover:text-paper"
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {tab === "options" && (
+          <section className="animate-rise space-y-4">
+            <div>
+              <h2 className="font-display text-lg font-semibold text-paper">Options</h2>
+              <p className="mt-1 text-[13px] text-muted">
+                Comportement système autour de la session.
+              </p>
+            </div>
+            <div className="space-y-0 overflow-hidden rounded-2xl border border-line bg-surface/60">
+              <OptionRow
+                label="Plan Performances élevées"
+                hint="Restauré automatiquement à la sortie."
+                checked={config.high_performance}
+                onChange={(v) => patch({ high_performance: v })}
+              />
+              <OptionRow
+                label="Protéger la fenêtre au premier plan"
+                hint="Le jeu déjà ouvert n'est jamais fermé."
+                checked={config.protect_foreground}
+                onChange={(v) => patch({ protect_foreground: v })}
+              />
+              <OptionRow
+                label="Réduire à l'activation"
+                hint="Mode Jeu passe en barre des tâches."
+                checked={config.minimize_on_activate}
+                onChange={(v) => patch({ minimize_on_activate: v })}
+              />
+              <OptionRow
+                label="Démarrer avec Windows"
+                hint="Lancement à la connexion."
+                checked={config.start_with_windows}
+                onChange={(v) => patch({ start_with_windows: v })}
+              />
+              <OptionRow
+                label={`Services ${config.services.join(", ")}`}
+                hint="Nécessite les droits administrateur."
+                checked={config.stop_services}
+                onChange={(v) => patch({ stop_services: v })}
+                last
+              />
+            </div>
+          </section>
+        )}
       </main>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-ink via-ink/95 to-transparent" />
-      <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 px-8 pb-8">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 h-36 bg-gradient-to-t from-ink via-ink/90 to-transparent" />
+      <div className="absolute inset-x-0 bottom-0 z-30 px-7 pb-7">
         <Button
           size="lg"
           variant={active ? "outline" : "primary"}
-          className="flex-1"
+          className="w-full"
           disabled={busy}
           onClick={() => run(active ? "restore" : "activate")}
         >
@@ -463,6 +548,69 @@ export default function App() {
   );
 }
 
+function Stat({
+  value,
+  unit,
+  label,
+  accent,
+}: {
+  value: number;
+  unit?: string;
+  label: string;
+  accent?: boolean;
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline gap-2">
+        <span
+          className={cn(
+            "font-display text-[52px] font-semibold leading-none tracking-tighter",
+            accent ? "text-brass" : "text-paper"
+          )}
+        >
+          {value}
+        </span>
+        {unit && <span className="text-base font-medium text-muted">{unit}</span>}
+      </div>
+      <p className="mt-3 text-[13px] text-muted">{label}</p>
+    </div>
+  );
+}
+
+function SummaryChip({
+  on,
+  title,
+  detail,
+  onClick,
+}: {
+  on: boolean;
+  title: string;
+  detail: string;
+  onClick?: () => void;
+}) {
+  const className = cn(
+    "rounded-2xl border border-line bg-surface/70 px-4 py-3 text-left transition-colors",
+    onClick && "hover:border-muted/40 hover:bg-raised"
+  );
+  const body = (
+    <>
+      <div className="flex items-center gap-2">
+        <span className={cn("h-1.5 w-1.5 rounded-full", on ? "bg-jade" : "bg-muted/50")} />
+        <p className="text-[13px] font-semibold text-paper">{title}</p>
+      </div>
+      <p className="mt-1 text-[12px] text-muted">{detail}</p>
+    </>
+  );
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className}>
+        {body}
+      </button>
+    );
+  }
+  return <div className={className}>{body}</div>;
+}
+
 function Setting({
   label,
   hint,
@@ -475,12 +623,45 @@ function Setting({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <div className="flex items-start justify-between gap-8">
+    <div className="flex items-start justify-between gap-6">
       <div className="min-w-0">
-        <p className="text-sm font-medium">{label}</p>
+        <p className="text-sm font-medium text-paper">{label}</p>
         <p className="mt-1 text-[13px] leading-relaxed text-muted">{hint}</p>
       </div>
       <Switch checked={checked} onCheckedChange={onChange} className="mt-0.5 shrink-0" />
     </div>
   );
+}
+
+function OptionRow({
+  label,
+  hint,
+  checked,
+  onChange,
+  last,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  last?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-start justify-between gap-6 px-5 py-4",
+        !last && "border-b border-line/80"
+      )}
+    >
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-paper">{label}</p>
+        <p className="mt-1 text-[13px] leading-relaxed text-muted">{hint}</p>
+      </div>
+      <Switch checked={checked} onCheckedChange={onChange} className="mt-0.5 shrink-0" />
+    </div>
+  );
+}
+
+function Divider() {
+  return <div className="h-px bg-line/80" />;
 }

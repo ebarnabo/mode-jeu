@@ -7,7 +7,7 @@
   html, body, #root { height: 100%; }
   body {
     @apply bg-ink text-paper font-sans;
-    font-feature-settings: "cv11", "ss01";
+    font-feature-settings: "ss01";
     user-select: none;
     overflow: hidden;
   }
@@ -17,6 +17,15 @@
     background: transparent !important;
   }
   :focus-visible { @apply outline-none ring-2 ring-brass/70 ring-offset-2 ring-offset-ink rounded-xl; }
+}
+
+@layer components {
+  .app-shell {
+    background:
+      radial-gradient(1200px 500px at 10% -10%, rgba(214, 166, 74, 0.08), transparent 55%),
+      radial-gradient(900px 420px at 100% 0%, rgba(95, 185, 140, 0.05), transparent 50%),
+      linear-gradient(180deg, #12141a 0%, #0E0F12 42%, #0E0F12 100%);
+  }
 }
 
 @layer utilities {
