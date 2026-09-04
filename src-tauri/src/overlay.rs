@@ -159,11 +159,13 @@ pub fn get_metrics(app: &AppHandle, cfg: &OverlayConfig) -> Metrics {
 
 pub fn sync_overlay(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) {
     let Some(win) = app.get_webview_window("overlay") else {
+        metrics::set_sampling(false);
         return;
     };
     let should_show = cfg.enabled && !cfg.hidden && (game_active || cfg.always);
     if !should_show {
         let _ = win.hide();
+        metrics::set_sampling(false);
         return;
     }
     if let Err(e) = place_overlay(app, &win, cfg) {
@@ -173,6 +175,7 @@ pub fn sync_overlay(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) {
     let _ = win.set_ignore_cursor_events(true);
     let _ = win.set_always_on_top(true);
     let _ = win.show();
+    metrics::set_sampling(true);
 }
 
 fn pick_monitor<'a>(monitors: &'a [MonitorInfo], name: Option<&str>) -> Option<&'a MonitorInfo> {

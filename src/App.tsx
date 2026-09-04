@@ -110,18 +110,23 @@ export default function App() {
     setMonitors(m);
   }, []);
 
+  // Liste processus : une fois au boot (chiffres Session), puis plus souvent sur Apps.
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  // Liste processus seulement sur l'onglet Apps (pas en boucle partout).
   useEffect(() => {
-    if (tab !== "apps" || busy) return;
+    if (busy) return;
     const tick = () => {
       invoke<ProcGroup[]>("list_processes").then(setProcs).catch(() => {});
     };
-    tick();
-    const id = setInterval(tick, 10000);
+    if (tab === "apps") {
+      tick();
+      const id = setInterval(tick, 10000);
+      return () => clearInterval(id);
+    }
+    // Hors Apps : refresh léger occasionnel pour les totaux Session.
+    const id = setInterval(tick, 30000);
     return () => clearInterval(id);
   }, [tab, busy]);
 
@@ -150,12 +155,17 @@ export default function App() {
     try {
       const next = await invoke<Session>(cmd);
       setSession(next);
-      setProcs(await invoke<ProcGroup[]>("list_processes"));
       if (cmd === "activate") {
         setIgnition({
           freedMb: next.freed_mb,
           appsClosed: next.closed_names.length,
         });
+        // Si on minimise, pas besoin de rescanner tous les process tout de suite.
+        if (!config?.minimize_on_activate) {
+          setProcs(await invoke<ProcGroup[]>("list_processes"));
+        }
+      } else {
+        setProcs(await invoke<ProcGroup[]>("list_processes"));
       }
     } finally {
       setBusy(false);

@@ -185,6 +185,28 @@ fn write_json<T: Serialize>(app: &AppHandle, file: &str, v: &T) {
     }
 }
 
+static CONFIG_CACHE: Mutex<Option<Config>> = Mutex::new(None);
+
+fn load_config(app: &AppHandle) -> Config {
+    if let Ok(guard) = CONFIG_CACHE.lock() {
+        if let Some(c) = guard.as_ref() {
+            return c.clone();
+        }
+    }
+    let c = read_json::<Config>(app, "config.json");
+    if let Ok(mut guard) = CONFIG_CACHE.lock() {
+        *guard = Some(c.clone());
+    }
+    c
+}
+
+fn store_config(app: &AppHandle, config: &Config) {
+    write_json(app, "config.json", config);
+    if let Ok(mut guard) = CONFIG_CACHE.lock() {
+        *guard = Some(config.clone());
+    }
+}
+
 fn is_critical(name: &str) -> bool {
     CRITICAL.contains(&name.to_lowercase().as_str())
 }
@@ -384,12 +406,12 @@ fn sync_from_config(app: &AppHandle, cfg: &Config) {
 
 #[tauri::command]
 fn get_config(app: AppHandle) -> Config {
-    read_json::<Config>(&app, "config.json")
+    load_config(&app)
 }
 
 #[tauri::command]
 fn save_config(app: AppHandle, config: Config) {
-    write_json(&app, "config.json", &config);
+    store_config(&app, &config);
     sync_from_config(&app, &config);
 }
 
@@ -400,7 +422,7 @@ fn get_session(app: AppHandle) -> Session {
 
 #[tauri::command]
 fn list_processes(app: AppHandle) -> Vec<ProcGroup> {
-    list_processes_cached(&read_json::<Config>(&app, "config.json"))
+    list_processes_cached(&load_config(&app))
 }
 
 #[tauri::command]
@@ -410,20 +432,20 @@ fn list_monitors(app: AppHandle) -> Result<Vec<overlay::MonitorInfo>, String> {
 
 #[tauri::command]
 fn get_metrics(app: AppHandle) -> metrics::Metrics {
-    let cfg = read_json::<Config>(&app, "config.json");
+    let cfg = load_config(&app);
     overlay::get_metrics(&app, &cfg.overlay)
 }
 
 #[tauri::command]
 fn get_overlay_config(app: AppHandle) -> OverlayConfig {
-    read_json::<Config>(&app, "config.json").overlay
+    load_config(&app).overlay
 }
 
 #[tauri::command]
 fn toggle_overlay_visibility(app: AppHandle) -> OverlayConfig {
-    let mut cfg = read_json::<Config>(&app, "config.json");
+    let mut cfg = load_config(&app);
     overlay::toggle_hidden(&mut cfg.overlay);
-    write_json(&app, "config.json", &cfg);
+    store_config(&app, &cfg);
     sync_from_config(&app, &cfg);
     cfg.overlay
 }
@@ -438,7 +460,7 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
 
 #[tauri::command]
 fn activate(app: AppHandle) -> Result<Session, String> {
-    let cfg = read_json::<Config>(&app, "config.json");
+    let cfg = load_config(&app);
     let groups = scan(&cfg, false);
 
     let mut session = Session {
@@ -506,7 +528,7 @@ fn activate(app: AppHandle) -> Result<Session, String> {
 #[tauri::command]
 fn restore(app: AppHandle) -> Result<Session, String> {
     let empty = restore_session(&app);
-    let cfg = read_json::<Config>(&app, "config.json");
+    let cfg = load_config(&app);
     overlay::sync_overlay(&app, &cfg.overlay, false);
     let _ = app.emit("overlay-config", &cfg.overlay);
     show_main(&app);
@@ -515,7 +537,7 @@ fn restore(app: AppHandle) -> Result<Session, String> {
 
 fn restore_session(app: &AppHandle) -> Session {
     let session = read_json::<Session>(app, "session.json");
-    let cfg = read_json::<Config>(app, "config.json");
+    let cfg = load_config(app);
 
     if cfg.reopen_closed_apps {
         for path in &session.closed {
@@ -630,7 +652,7 @@ pub fn run_app() {
                 let _ = w.hide();
             }
             setup_tray(app.handle())?;
-            let cfg = read_json::<Config>(app.handle(), "config.json");
+            let cfg = load_config(app.handle());
             sync_from_config(app.handle(), &cfg);
             Ok(())
         })

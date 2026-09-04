@@ -82,6 +82,8 @@ static LATEST: Mutex<Metrics> = Mutex::new(Metrics {
 });
 static MONITOR: Mutex<Option<MonitorRect>> = Mutex::new(None);
 static STARTED: AtomicBool = AtomicBool::new(false);
+/// false = overlay masqué → le sampler dort (zéro coût GPU/ADL/RTSS).
+static SAMPLING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
 pub struct MonitorRect {
@@ -91,12 +93,22 @@ pub struct MonitorRect {
     pub height: i32,
 }
 
-/// Retourne immédiatement le dernier snapshot ; lance le sampler une seule fois.
+/// Active / coupe l'échantillonnage (lié à la visibilité de l'overlay).
+pub fn set_sampling(enabled: bool) {
+    SAMPLING.store(enabled, Ordering::SeqCst);
+    if enabled {
+        ensure_sampler();
+    }
+}
+
+/// Retourne immédiatement le dernier snapshot ; lance le sampler si besoin.
 pub fn collect(game_monitor: Option<MonitorRect>) -> Metrics {
     if let Ok(mut g) = MONITOR.lock() {
         *g = game_monitor;
     }
-    ensure_sampler();
+    if SAMPLING.load(Ordering::Relaxed) {
+        ensure_sampler();
+    }
     LATEST
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -111,11 +123,14 @@ fn ensure_sampler() {
         .name("metrics-sampler".into())
         .spawn(|| {
             let mut s = Sampler::new();
-            // Premier tick immédiat.
-            tick(&mut s);
             loop {
-                std::thread::sleep(Duration::from_millis(1000));
-                tick(&mut s);
+                if SAMPLING.load(Ordering::Relaxed) {
+                    tick(&mut s);
+                    std::thread::sleep(Duration::from_millis(1000));
+                } else {
+                    // Overlay off : idle quasi gratuit.
+                    std::thread::sleep(Duration::from_millis(2500));
+                }
             }
         })
         .ok();
