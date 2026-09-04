@@ -22,6 +22,7 @@ type ProcGroup = {
   key: string;
   name: string;
   memory_mb: number;
+  cpu_pct: number;
   instances: number;
   path: string | null;
   protected: boolean;
@@ -48,11 +49,17 @@ type OverlayConfig = {
 type Config = {
   keep: string[];
   high_performance: boolean;
+  ultimate_performance: boolean;
   protect_foreground: boolean;
   stop_services: boolean;
   services: string[];
   minimize_on_activate: boolean;
   start_with_windows: boolean;
+  disable_game_dvr: boolean;
+  enable_game_mode: boolean;
+  disable_notifications: boolean;
+  visual_effects_perf: boolean;
+  disable_transparency: boolean;
   overlay: OverlayConfig;
 };
 
@@ -64,6 +71,7 @@ type Session = {
 };
 
 type Tab = "session" | "apps" | "overlay" | "options";
+type AppSort = "ram" | "cpu";
 
 const TABS: { id: Tab; label: string; icon: typeof Zap }[] = [
   { id: "session", label: "Session", icon: Zap },
@@ -81,6 +89,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("session");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
+  const [appSort, setAppSort] = useState<AppSort>("ram");
 
   const refresh = useCallback(async () => {
     const [c, s, p, m] = await Promise.all([
@@ -149,8 +158,14 @@ export default function App() {
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return procs.filter((p) => !p.protected && (!q || p.name.toLowerCase().includes(q)));
-  }, [procs, query]);
+    const list = procs.filter((p) => !p.protected && (!q || p.name.toLowerCase().includes(q)));
+    return [...list].sort((a, b) => {
+      if (appSort === "cpu") {
+        return b.cpu_pct - a.cpu_pct || b.memory_mb - a.memory_mb;
+      }
+      return b.memory_mb - a.memory_mb || b.cpu_pct - a.cpu_pct;
+    });
+  }, [procs, query, appSort]);
 
   if (!config) {
     return (
@@ -282,14 +297,38 @@ export default function App() {
               </span>
             </div>
 
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
-              <Input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Rechercher"
-                className="pl-11"
-              />
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[200px] flex-1">
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Rechercher"
+                  className="pl-11"
+                />
+              </div>
+              <div className="flex gap-1 rounded-xl border border-line bg-surface/70 p-1">
+                {(
+                  [
+                    ["ram", "RAM"],
+                    ["cpu", "CPU"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setAppSort(id)}
+                    className={cn(
+                      "rounded-lg px-3 py-2 text-[12px] font-semibold transition-colors",
+                      appSort === id
+                        ? "bg-raised text-brass shadow-[inset_0_0_0_1px_rgba(214,166,74,0.28)]"
+                        : "text-muted hover:text-paper"
+                    )}
+                  >
+                    {label} ↓
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-line bg-surface/60">
@@ -317,7 +356,13 @@ export default function App() {
                         )}
                       </div>
                       <p className="mt-0.5 text-xs text-muted">
-                        {p.memory_mb} Mo
+                        <span className={cn(appSort === "ram" && "text-paper/80")}>
+                          {p.memory_mb} Mo
+                        </span>
+                        {" · "}
+                        <span className={cn(appSort === "cpu" && "text-paper/80")}>
+                          {Math.round(p.cpu_pct)}% CPU
+                        </span>
                         {p.instances > 1 && ` · ${p.instances} processus`}
                       </p>
                     </div>
@@ -493,42 +538,103 @@ export default function App() {
             <div>
               <h2 className="font-display text-lg font-semibold text-paper">Options</h2>
               <p className="mt-1 text-[13px] text-muted">
-                Comportement système autour de la session.
+                Tweaks appliqués à l’activation, restaurés à la sortie.
               </p>
             </div>
             <UpdatesPanel gameMode={active} />
-            <div className="space-y-0 overflow-hidden rounded-2xl border border-line bg-surface/60">
-              <OptionRow
-                label="Plan Performances élevées"
-                hint="Restauré automatiquement à la sortie."
-                checked={config.high_performance}
-                onChange={(v) => patch({ high_performance: v })}
-              />
-              <OptionRow
-                label="Protéger la fenêtre au premier plan"
-                hint="Le jeu déjà ouvert n'est jamais fermé."
-                checked={config.protect_foreground}
-                onChange={(v) => patch({ protect_foreground: v })}
-              />
-              <OptionRow
-                label="Réduire à l'activation"
-                hint="Mode Jeu passe en barre des tâches."
-                checked={config.minimize_on_activate}
-                onChange={(v) => patch({ minimize_on_activate: v })}
-              />
-              <OptionRow
-                label="Démarrer avec Windows"
-                hint="Lancement à la connexion."
-                checked={config.start_with_windows}
-                onChange={(v) => patch({ start_with_windows: v })}
-              />
-              <OptionRow
-                label={`Services ${config.services.join(", ")}`}
-                hint="Nécessite les droits administrateur."
-                checked={config.stop_services}
-                onChange={(v) => patch({ stop_services: v })}
-                last
-              />
+
+            <div>
+              <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">
+                Session
+              </p>
+              <div className="space-y-0 overflow-hidden rounded-2xl border border-line bg-surface/60">
+                <OptionRow
+                  label="Protéger la fenêtre au premier plan"
+                  hint="Le jeu déjà ouvert n'est jamais fermé."
+                  checked={config.protect_foreground}
+                  onChange={(v) => patch({ protect_foreground: v })}
+                />
+                <OptionRow
+                  label="Réduire à l'activation"
+                  hint="Mode Jeu passe en barre des tâches."
+                  checked={config.minimize_on_activate}
+                  onChange={(v) => patch({ minimize_on_activate: v })}
+                />
+                <OptionRow
+                  label="Démarrer avec Windows"
+                  hint="Lancement à la connexion."
+                  checked={config.start_with_windows}
+                  onChange={(v) => patch({ start_with_windows: v })}
+                  last
+                />
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">
+                Performances jeu
+              </p>
+              <div className="space-y-0 overflow-hidden rounded-2xl border border-line bg-surface/60">
+                <OptionRow
+                  label="Plan Performances élevées"
+                  hint="Active le plan High Performance Windows."
+                  checked={config.high_performance}
+                  onChange={(v) =>
+                    patch({
+                      high_performance: v,
+                      ultimate_performance: v ? config.ultimate_performance : false,
+                    })
+                  }
+                />
+                <OptionRow
+                  label="Plan Ultimate Performance"
+                  hint="Prioritaire si disponible (copie le schéma Windows)."
+                  checked={config.ultimate_performance}
+                  onChange={(v) =>
+                    patch({
+                      ultimate_performance: v,
+                      high_performance: v ? true : config.high_performance,
+                    })
+                  }
+                />
+                <OptionRow
+                  label="Mode Jeu Windows"
+                  hint="Active Game Mode (priorité CPU/GPU au jeu)."
+                  checked={config.enable_game_mode}
+                  onChange={(v) => patch({ enable_game_mode: v })}
+                />
+                <OptionRow
+                  label="Couper Game DVR / captures"
+                  hint="Moins d’overhead Xbox Game Bar en arrière-plan."
+                  checked={config.disable_game_dvr}
+                  onChange={(v) => patch({ disable_game_dvr: v })}
+                />
+                <OptionRow
+                  label="Couper les notifications toast"
+                  hint="Évite les pop-ups pendant la session."
+                  checked={config.disable_notifications}
+                  onChange={(v) => patch({ disable_notifications: v })}
+                />
+                <OptionRow
+                  label="Effets visuels → performances"
+                  hint="Désactive animations / ombres Windows."
+                  checked={config.visual_effects_perf}
+                  onChange={(v) => patch({ visual_effects_perf: v })}
+                />
+                <OptionRow
+                  label="Désactiver la transparence"
+                  hint="Aero / acrylique off le temps de la session."
+                  checked={config.disable_transparency}
+                  onChange={(v) => patch({ disable_transparency: v })}
+                />
+                <OptionRow
+                  label={`Services (${config.services.join(", ")})`}
+                  hint="SysMain, WSearch, DiagTrack — admin recommandé."
+                  checked={config.stop_services}
+                  onChange={(v) => patch({ stop_services: v })}
+                  last
+                />
+              </div>
             </div>
           </section>
         )}

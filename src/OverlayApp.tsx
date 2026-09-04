@@ -83,9 +83,14 @@ export default function OverlayApp() {
       });
     }
     if (cfg.show_temps) {
-      const cpu = metrics.cpu_temp_c == null ? "—" : `${fmt(metrics.cpu_temp_c, 0)}°`;
-      const gpu = metrics.gpu_temp_c == null ? "—" : `${fmt(metrics.gpu_temp_c, 0)}°`;
-      out.push({ label: "TEMP", value: `${cpu} / ${gpu}` });
+      out.push({
+        label: "CPU °C",
+        value: metrics.cpu_temp_c == null ? "—" : `${fmt(metrics.cpu_temp_c, 0)}°`,
+      });
+      out.push({
+        label: "GPU °C",
+        value: metrics.gpu_temp_c == null ? "—" : `${fmt(metrics.gpu_temp_c, 0)}°`,
+      });
     }
     if (cfg.show_ram) {
       out.push({ label: "RAM", value: `${fmt(metrics.ram_pct, 0)}%` });
@@ -99,23 +104,23 @@ export default function OverlayApp() {
 
   return (
     <div
-      className="h-full w-full select-none px-1 py-1"
+      className="h-full w-full select-none px-1.5 py-1.5"
       style={{ background: "transparent" }}
     >
       <div
-        className="h-full rounded-2xl border border-white/10 px-3 py-2 shadow-[0_12px_40px_rgba(0,0,0,.45)]"
+        className="flex h-full flex-col justify-center rounded-2xl border border-white/12 px-4 py-3 shadow-[0_16px_48px_rgba(0,0,0,.5)]"
         style={{ background: `rgba(14, 15, 18, ${opacity})` }}
       >
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brass/80">
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-brass/85">
           Mode Jeu
         </div>
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1.5">
           {rows.map((r) => (
-            <div key={r.label} className="flex items-baseline justify-between gap-3">
-              <span className="text-[11px] font-medium text-muted">{r.label}</span>
+            <div key={r.label} className="flex items-baseline justify-between gap-4">
+              <span className="text-[12px] font-medium text-muted">{r.label}</span>
               <span
                 className={cn(
-                  "font-mono text-[15px] font-semibold tabular-nums tracking-tight",
+                  "font-mono text-[20px] font-semibold tabular-nums tracking-tight leading-none",
                   r.accent ? "text-brass" : "text-paper"
                 )}
               >

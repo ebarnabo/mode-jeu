@@ -1,5 +1,6 @@
 mod metrics;
 mod overlay;
+mod tweaks;
 #[cfg(windows)]
 mod amd_adl;
 
@@ -68,8 +69,6 @@ const SAFE_PATH_FRAGMENTS: &[&str] = &[
     "\\amd\\", "\\common files\\ea\\",
 ];
 
-const HIGH_PERF_GUID: &str = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
-
 fn default_true() -> bool {
     true
 }
@@ -79,6 +78,7 @@ pub struct ProcGroup {
     pub key: String,
     pub name: String,
     pub memory_mb: u64,
+    pub cpu_pct: f32,
     pub instances: usize,
     pub path: Option<String>,
     pub protected: bool,
@@ -91,6 +91,8 @@ pub struct Config {
     pub keep: Vec<String>,
     #[serde(default = "default_true")]
     pub high_performance: bool,
+    #[serde(default)]
+    pub ultimate_performance: bool,
     #[serde(default = "default_true")]
     pub protect_foreground: bool,
     #[serde(default)]
@@ -101,12 +103,26 @@ pub struct Config {
     pub minimize_on_activate: bool,
     #[serde(default)]
     pub start_with_windows: bool,
+    #[serde(default = "default_true")]
+    pub disable_game_dvr: bool,
+    #[serde(default = "default_true")]
+    pub enable_game_mode: bool,
+    #[serde(default)]
+    pub disable_notifications: bool,
+    #[serde(default)]
+    pub visual_effects_perf: bool,
+    #[serde(default)]
+    pub disable_transparency: bool,
     #[serde(default)]
     pub overlay: OverlayConfig,
 }
 
 fn default_services() -> Vec<String> {
-    vec!["SysMain".into(), "WSearch".into()]
+    vec![
+        "SysMain".into(),
+        "WSearch".into(),
+        "DiagTrack".into(),
+    ]
 }
 
 impl Default for Config {
@@ -118,11 +134,17 @@ impl Default for Config {
                 "discord.exe".into(),
             ],
             high_performance: true,
+            ultimate_performance: false,
             protect_foreground: true,
             stop_services: false,
             services: default_services(),
             minimize_on_activate: true,
             start_with_windows: false,
+            disable_game_dvr: true,
+            enable_game_mode: true,
+            disable_notifications: false,
+            visual_effects_perf: false,
+            disable_transparency: false,
             overlay: OverlayConfig::default(),
         }
     }
@@ -136,6 +158,8 @@ pub struct Session {
     pub freed_mb: u64,
     pub previous_plan: Option<String>,
     pub stopped_services: Vec<String>,
+    #[serde(default)]
+    pub tweaks: tweaks::TweaksSnapshot,
 }
 
 fn dir(app: &AppHandle) -> PathBuf {
@@ -220,9 +244,14 @@ fn with_proc_sys<R>(f: impl FnOnce(&mut System) -> R) -> R {
     f(guard.as_mut().unwrap())
 }
 
-fn scan(cfg: &Config) -> Vec<ProcGroup> {
+fn scan(cfg: &Config, with_cpu: bool) -> Vec<ProcGroup> {
     with_proc_sys(|sys| {
         sys.refresh_processes(ProcessesToUpdate::All, true);
+        if with_cpu {
+            // Double refresh pour des % CPU exploitables (sysinfo).
+            std::thread::sleep(Duration::from_millis(120));
+            sys.refresh_processes(ProcessesToUpdate::All, true);
+        }
 
         let fg = foreground_pid();
         let self_pid = std::process::id();
@@ -241,6 +270,7 @@ fn scan(cfg: &Config) -> Vec<ProcGroup> {
                 key: key.clone(),
                 name: name.trim_end_matches(".exe").to_string(),
                 memory_mb: 0,
+                cpu_pct: 0.0,
                 instances: 0,
                 path: path.clone(),
                 protected,
@@ -248,6 +278,9 @@ fn scan(cfg: &Config) -> Vec<ProcGroup> {
                 foreground: false,
             });
             entry.memory_mb += proc_.memory() / 1_048_576;
+            if with_cpu {
+                entry.cpu_pct += proc_.cpu_usage();
+            }
             entry.instances += 1;
             if entry.path.is_none() {
                 entry.path = path;
@@ -258,12 +291,7 @@ fn scan(cfg: &Config) -> Vec<ProcGroup> {
         }
 
         let mut v: Vec<ProcGroup> = map.into_values().filter(|p| p.memory_mb > 0).collect();
-        v.sort_by(|a, b| {
-            b.protected
-                .cmp(&a.protected)
-                .reverse()
-                .then(b.memory_mb.cmp(&a.memory_mb))
-        });
+        v.sort_by(|a, b| b.memory_mb.cmp(&a.memory_mb));
         v
     })
 }
@@ -293,7 +321,7 @@ fn list_processes_cached(cfg: &Config) -> Vec<ProcGroup> {
             }
         }
     }
-    let groups = scan(cfg);
+    let groups = scan(cfg, true);
     if let Ok(mut guard) = PROC_CACHE.lock() {
         *guard = Some(ProcCache {
             at: Instant::now(),
@@ -404,27 +432,30 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
     c.output().ok().map(|o| String::from_utf8_lossy(&o.stdout).to_string())
 }
 
-fn active_plan() -> Option<String> {
-    let out = run("powercfg", &["/getactivescheme"])?;
-    out.split_whitespace()
-        .find(|t| t.len() == 36 && t.matches('-').count() == 4)
-        .map(|s| s.to_string())
-}
-
 #[tauri::command]
 fn activate(app: AppHandle) -> Result<Session, String> {
     let cfg = read_json::<Config>(&app, "config.json");
-    let groups = scan(&cfg);
+    let groups = scan(&cfg, false);
 
     let mut session = Session {
         active: true,
         ..Default::default()
     };
 
-    if cfg.high_performance {
-        session.previous_plan = active_plan();
-        run("powercfg", &["/setactive", HIGH_PERF_GUID]);
-    }
+    let snap = tweaks::apply(&tweaks::TweakFlags {
+        high_performance: cfg.high_performance,
+        ultimate_performance: cfg.ultimate_performance,
+        disable_game_dvr: cfg.disable_game_dvr,
+        enable_game_mode: cfg.enable_game_mode,
+        disable_notifications: cfg.disable_notifications,
+        visual_effects_perf: cfg.visual_effects_perf,
+        disable_transparency: cfg.disable_transparency,
+        stop_services: cfg.stop_services,
+        services: cfg.services.clone(),
+    });
+    session.previous_plan = snap.previous_plan.clone();
+    session.stopped_services = snap.stopped_services.clone();
+    session.tweaks = snap;
 
     let targets: Vec<&ProcGroup> = groups
         .iter()
@@ -459,14 +490,6 @@ fn activate(app: AppHandle) -> Result<Session, String> {
         *guard = None;
     }
 
-    if cfg.stop_services {
-        for s in &cfg.services {
-            if run("sc", &["stop", s]).is_some() {
-                session.stopped_services.push(s.clone());
-            }
-        }
-    }
-
     write_json(&app, "session.json", &session);
     overlay::sync_overlay(&app, &cfg.overlay, true);
     let _ = app.emit("overlay-config", &cfg.overlay);
@@ -495,11 +518,23 @@ fn restore_session(app: &AppHandle) -> Session {
         c.creation_flags(NO_WINDOW);
         let _ = c.spawn();
     }
-    for s in &session.stopped_services {
-        run("sc", &["start", s]);
-    }
-    if let Some(plan) = &session.previous_plan {
-        run("powercfg", &["/setactive", plan]);
+
+    // Nouveau chemin (snapshot tweaks) + rétrocompat anciennes sessions.
+    if session.tweaks.previous_plan.is_some()
+        || !session.tweaks.stopped_services.is_empty()
+        || session.tweaks.visual_fx.is_some()
+        || session.tweaks.transparency.is_some()
+        || session.tweaks.game_dvr_app.is_some()
+        || session.tweaks.toast_enabled.is_some()
+    {
+        tweaks::restore(&session.tweaks);
+    } else {
+        for s in &session.stopped_services {
+            run("sc", &["start", s]);
+        }
+        if let Some(plan) = &session.previous_plan {
+            run("powercfg", &["/setactive", plan]);
+        }
     }
 
     let empty = Session::default();

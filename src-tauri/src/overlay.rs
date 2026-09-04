@@ -189,20 +189,27 @@ fn place_overlay(app: &AppHandle, win: &WebviewWindow, cfg: &OverlayConfig) -> R
     let mon = pick_monitor(&monitors, cfg.monitor_name.as_deref())
         .ok_or_else(|| "aucun moniteur".to_string())?;
 
-    let lines = [
-        cfg.show_fps,
-        cfg.show_cpu,
-        cfg.show_gpu,
-        cfg.show_temps,
-        cfg.show_ram,
-    ]
-    .iter()
-    .filter(|&&x| x)
-    .count()
-    .max(1);
+    let mut lines = 0u32;
+    if cfg.show_fps {
+        lines += 1;
+    }
+    if cfg.show_cpu {
+        lines += 1;
+    }
+    if cfg.show_gpu {
+        lines += 1;
+    }
+    if cfg.show_temps {
+        lines += 2;
+    }
+    if cfg.show_ram {
+        lines += 1;
+    }
+    let lines = lines.max(1);
 
-    let width = 220u32;
-    let height = 28 + (lines as u32) * 28 + 16;
+    // Overlay plus large : valeurs lisibles + temps séparés.
+    let width = 300u32;
+    let height = 44 + lines * 36 + 16;
     let margin = 18i32;
     let (x, y) = match cfg.position.as_str() {
         "top-left" => (mon.x + margin, mon.y + margin),
