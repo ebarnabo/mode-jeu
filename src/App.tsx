@@ -11,7 +11,7 @@ import {
   Settings2,
   Zap,
 } from "lucide-react";
-import { UpdateBar } from "@/components/UpdateBar";
+import { UpdateBar, UpdateProvider, UpdatesPanel } from "@/components/UpdateBar";
 import { MonitorPicker, type MonitorInfo } from "@/components/MonitorPicker";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -154,6 +154,12 @@ export default function App() {
   }
 
   return (
+    <UpdateProvider
+      gameMode={active}
+      onRestore={async () => {
+        await run("restore");
+      }}
+    >
     <div className="app-shell relative flex h-full flex-col overflow-hidden">
       <header
         data-tauri-drag-region
@@ -185,12 +191,7 @@ export default function App() {
         </div>
       </header>
 
-      <UpdateBar
-        gameMode={active}
-        onRestore={async () => {
-          await run("restore");
-        }}
-      />
+      <UpdateBar gameMode={active} />
 
       <nav className="relative z-10 mx-7 mb-5 flex gap-1 rounded-2xl border border-line bg-surface/70 p-1 backdrop-blur-sm">
         {TABS.map(({ id, label, icon: Icon }) => {
@@ -488,6 +489,7 @@ export default function App() {
                 Comportement système autour de la session.
               </p>
             </div>
+            <UpdatesPanel gameMode={active} />
             <div className="space-y-0 overflow-hidden rounded-2xl border border-line bg-surface/60">
               <OptionRow
                 label="Plan Performances élevées"
@@ -545,6 +547,7 @@ export default function App() {
         </Button>
       </div>
     </div>
+    </UpdateProvider>
   );
 }
 

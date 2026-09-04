@@ -142,6 +142,7 @@ pub fn sync_overlay(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) {
     if let Err(e) = place_overlay(app, &win, cfg) {
         eprintln!("overlay place: {e}");
     }
+    let _ = win.set_skip_taskbar(true);
     let _ = win.set_ignore_cursor_events(true);
     let _ = win.set_always_on_top(true);
     let _ = win.show();

@@ -87,7 +87,7 @@ pub fn collect(game_monitor: Option<MonitorRect>) -> Metrics {
 
     if now.duration_since(cache.last_temp) >= Duration::from_secs(3) {
         cache.components.refresh();
-        cache.cpu_temp = cpu_temp_from_components(&cache.components);
+        cache.cpu_temp = cpu_temp_from_components(&cache.components).or_else(query_cpu_temp_wmi);
         cache.last_temp = now;
     }
 
@@ -126,6 +126,7 @@ fn cpu_temp_from_components(components: &Components) -> Option<f32> {
             || label.contains("tdie")
             || label.contains("tctl")
             || label.contains("computer")
+            || label.contains("acpi")
         {
             return Some(t);
         }
@@ -134,7 +135,59 @@ fn cpu_temp_from_components(components: &Components) -> Option<f32> {
     best
 }
 
+fn normalize_temp(raw: f32) -> Option<f32> {
+    if !raw.is_finite() {
+        return None;
+    }
+    // Kelvin * 10 (ex: 3182 → 45 °C)
+    if raw > 200.0 {
+        let c = raw / 10.0 - 273.15;
+        return (1.0..=110.0).contains(&c).then_some(c);
+    }
+    (1.0..=110.0).contains(&raw).then_some(raw)
+}
+
+fn query_cpu_temp_wmi() -> Option<f32> {
+    // Pas besoin d'admin (contrairement à MSAcpi_*).
+    let script = r#"
+$ErrorActionPreference='SilentlyContinue'
+$vals = @()
+Get-CimInstance Win32_PerfFormattedData_Counters_ThermalZoneInformation | ForEach-Object {
+  if ($null -ne $_.HighPrecisionTemperature -and $_.HighPrecisionTemperature -gt 0) {
+    $vals += [double]$_.HighPrecisionTemperature
+  } elseif ($null -ne $_.Temperature -and $_.Temperature -gt 0) {
+    $vals += [double]$_.Temperature
+  }
+}
+if ($vals.Count -gt 0) { ($vals | Measure-Object -Maximum).Maximum }
+"#;
+    let out = run_hidden(
+        "powershell",
+        &["-NoProfile", "-NonInteractive", "-Command", script],
+    )?;
+    let raw = out.lines().find_map(|l| l.trim().parse::<f32>().ok())?;
+    normalize_temp(raw)
+}
+
 fn query_gpu() -> (Option<f32>, Option<f32>) {
+    let nvidia = query_gpu_nvidia();
+    if nvidia.0.is_some() || nvidia.1.is_some() {
+        return nvidia;
+    }
+
+    #[cfg(windows)]
+    {
+        let amd = crate::amd_adl::query_amd_gpu();
+        if amd.0.is_some() || amd.1.is_some() {
+            let util = amd.0.or_else(query_gpu_util_windows);
+            return (util, amd.1);
+        }
+    }
+
+    (query_gpu_util_windows(), None)
+}
+
+fn query_gpu_nvidia() -> (Option<f32>, Option<f32>) {
     let out = run_hidden(
         "nvidia-smi",
         &[
@@ -151,6 +204,28 @@ fn query_gpu() -> (Option<f32>, Option<f32>) {
         }
     }
     (None, None)
+}
+
+fn query_gpu_util_windows() -> Option<f32> {
+    let out = run_hidden(
+        "typeperf",
+        &[r"\GPU Engine(*engtype_3D)\Utilization Percentage", "-sc", "1"],
+    )?;
+    let mut max_v = 0f32;
+    let mut found = false;
+    for line in out.lines() {
+        // CSV: "timestamp","value"
+        for part in line.split(',') {
+            let p = part.trim().trim_matches('"');
+            if let Ok(v) = p.parse::<f32>() {
+                if (0.0..=100.0).contains(&v) {
+                    max_v = max_v.max(v);
+                    found = true;
+                }
+            }
+        }
+    }
+    found.then_some(max_v)
 }
 
 fn run_hidden(cmd: &str, args: &[&str]) -> Option<String> {

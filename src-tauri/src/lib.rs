@@ -1,5 +1,7 @@
 mod metrics;
 mod overlay;
+#[cfg(windows)]
+mod amd_adl;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -474,12 +476,15 @@ fn quit_app(app: &AppHandle) {
 }
 
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    // Menu court, libellés ASCII-safe : évite certains bugs de rendu du menu
+    // contextuel Windows (clic droit icône tray / barre des tâches).
     let open = MenuItem::with_id(app, "open", "Ouvrir", true, None::<&str>)?;
     let overlay_toggle =
-        MenuItem::with_id(app, "overlay", "Afficher / masquer l'overlay", true, None::<&str>)?;
+        MenuItem::with_id(app, "overlay", "Overlay on/off", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &overlay_toggle, &quit])?;
-    let mut tray = TrayIconBuilder::new()
+
+    let mut builder = TrayIconBuilder::with_id("mode-jeu-tray")
         .tooltip("Mode Jeu")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -492,19 +497,25 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                show_main(tray.app_handle());
+            match event {
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+                | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                } => show_main(tray.app_handle()),
+                _ => {}
             }
         });
+
     if let Some(icon) = app.default_window_icon() {
-        tray = tray.icon(icon.clone());
+        builder = builder.icon(icon.clone());
     }
-    tray.build(app)?;
+
+    builder.build(app)?;
     Ok(())
 }
 
@@ -516,6 +527,12 @@ pub fn run_app() {
             #[cfg(windows)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
+            // Overlay hors barre des tâches / aperçus (évite le glitch au clic droit).
+            if let Some(w) = app.get_webview_window("overlay") {
+                let _ = w.set_skip_taskbar(true);
+                let _ = w.set_title("");
+                let _ = w.hide();
+            }
             setup_tray(app.handle())?;
             let cfg = read_json::<Config>(app.handle(), "config.json");
             sync_from_config(app.handle(), &cfg);
