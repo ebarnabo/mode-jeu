@@ -164,6 +164,65 @@ pub struct Session {
     pub stopped_services: Vec<String>,
     #[serde(default)]
     pub tweaks: tweaks::TweaksSnapshot,
+    /// Identifiant du boot Windows au moment de l'activation (epoch sec du démarrage).
+    /// Si le PC a redémarré, la session est considérée périmée.
+    #[serde(default)]
+    pub boot_id: Option<u64>,
+}
+
+/// Timestamp approximatif du dernier boot (secondes epoch).
+fn current_boot_id() -> u64 {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::SystemInformation::GetTickCount64;
+        let uptime_ms = unsafe { GetTickCount64() };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        return now.saturating_sub(uptime_ms / 1000);
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
+}
+
+fn boot_ids_match(stored: u64, current: u64) -> bool {
+    stored.abs_diff(current) <= 3
+}
+
+/// Vérifie que « actif » correspond encore à ce boot. Sinon nettoie la session.
+fn sanitize_session(app: &AppHandle) -> Session {
+    let session = read_json::<Session>(app, "session.json");
+    if !session.active {
+        return session;
+    }
+
+    let boot = current_boot_id();
+    let still_valid = session
+        .boot_id
+        .is_some_and(|id| boot_ids_match(id, boot));
+
+    if still_valid {
+        return session;
+    }
+
+    // Session fantôme (reboot, crash ancien format, etc.) :
+    // on annule les tweaks système, sans relancer les apps (boot déjà passé).
+    tweaks::restore(&session.tweaks);
+    if session.tweaks.previous_plan.is_none() {
+        if let Some(plan) = &session.previous_plan {
+            run("powercfg", &["/setactive", plan]);
+        }
+        for s in &session.stopped_services {
+            run("sc", &["start", s]);
+        }
+    }
+
+    let empty = Session::default();
+    write_json(app, "session.json", &empty);
+    empty
 }
 
 fn dir(app: &AppHandle) -> PathBuf {
@@ -399,7 +458,7 @@ fn apply_startup(enabled: bool) {
 
 fn sync_from_config(app: &AppHandle, cfg: &Config) {
     apply_startup(cfg.start_with_windows);
-    let session = read_json::<Session>(app, "session.json");
+    let session = sanitize_session(app);
     overlay::sync_overlay(app, &cfg.overlay, session.active);
     let _ = app.emit("overlay-config", &cfg.overlay);
 }
@@ -417,7 +476,7 @@ fn save_config(app: AppHandle, config: Config) {
 
 #[tauri::command]
 fn get_session(app: AppHandle) -> Session {
-    read_json::<Session>(&app, "session.json")
+    sanitize_session(&app)
 }
 
 #[tauri::command]
@@ -465,6 +524,7 @@ fn activate(app: AppHandle) -> Result<Session, String> {
 
     let mut session = Session {
         active: true,
+        boot_id: Some(current_boot_id()),
         ..Default::default()
     };
 
@@ -652,6 +712,8 @@ pub fn run_app() {
                 let _ = w.hide();
             }
             setup_tray(app.handle())?;
+            // Invalide une session « active » fantôme (ex. après reboot).
+            let _ = sanitize_session(app.handle());
             let cfg = load_config(app.handle());
             sync_from_config(app.handle(), &cfg);
             Ok(())

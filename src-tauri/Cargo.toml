@@ -1,6 +1,6 @@
 [package]
 name = "mode-jeu"
-version = "0.3.6"
+version = "0.3.7"
 edition = "2021"
 
 [lib]
@@ -24,6 +24,7 @@ windows = { version = "0.58", features = [
   "Win32_UI_WindowsAndMessaging",
   "Win32_System_Memory",
   "Win32_System_LibraryLoader",
+  "Win32_System_SystemInformation",
 ] }
 
 [profile.release]
