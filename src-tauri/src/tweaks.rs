@@ -18,6 +18,10 @@ pub struct TweaksSnapshot {
     pub game_dvr_store: Option<u32>,
     pub game_mode_auto: Option<u32>,
     pub toast_enabled: Option<u32>,
+    pub widgets_taskbar: Option<u32>,
+    pub background_apps: Option<u32>,
+    pub system_responsiveness: Option<u32>,
+    pub network_throttling: Option<u32>,
     pub stopped_services: Vec<String>,
 }
 
@@ -33,7 +37,6 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
 
 fn reg_query_dword(path: &str, value: &str) -> Option<u32> {
     let out = run("reg", &["query", path, "/v", value])?;
-    // ... REG_DWORD    0x1
     for token in out.split_whitespace() {
         if let Some(hex) = token.strip_prefix("0x").or_else(|| token.strip_prefix("0X")) {
             return u32::from_str_radix(hex, 16).ok();
@@ -67,7 +70,6 @@ fn active_plan() -> Option<String> {
 }
 
 fn ensure_ultimate_plan() -> Option<String> {
-    // Si déjà présent dans la liste, on le trouve ; sinon on duplique le schéma.
     let list = run("powercfg", &["/list"]).unwrap_or_default();
     for line in list.lines() {
         if line.to_lowercase().contains("ultimate") {
@@ -94,6 +96,9 @@ pub struct TweakFlags {
     pub disable_notifications: bool,
     pub visual_effects_perf: bool,
     pub disable_transparency: bool,
+    pub disable_widgets: bool,
+    pub disable_background_apps: bool,
+    pub mmcss_gaming: bool,
     pub stop_services: bool,
     pub services: Vec<String>,
 }
@@ -121,6 +126,12 @@ pub fn apply(flags: &TweakFlags) -> TweaksSnapshot {
         snap.game_dvr_store = reg_query_dword(STORE, "GameDVR_Enabled");
         reg_set_dword(GDVR, "AppCaptureEnabled", 0);
         reg_set_dword(STORE, "GameDVR_Enabled", 0);
+        // Game Bar presence writer / overlays
+        reg_set_dword(
+            r"HKCU\Software\Microsoft\GameBar",
+            "UseNexusForGameBarEnabled",
+            0,
+        );
     }
 
     if flags.enable_game_mode {
@@ -139,13 +150,36 @@ pub fn apply(flags: &TweakFlags) -> TweaksSnapshot {
     if flags.visual_effects_perf {
         const FX: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects";
         snap.visual_fx = reg_query_dword(FX, "VisualFXSetting");
-        reg_set_dword(FX, "VisualFXSetting", 2); // Ajuster pour de meilleures performances
+        reg_set_dword(FX, "VisualFXSetting", 2);
     }
 
     if flags.disable_transparency {
         const TH: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
         snap.transparency = reg_query_dword(TH, "EnableTransparency");
         reg_set_dword(TH, "EnableTransparency", 0);
+    }
+
+    if flags.disable_widgets {
+        const ADV: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
+        snap.widgets_taskbar = reg_query_dword(ADV, "TaskbarDa");
+        reg_set_dword(ADV, "TaskbarDa", 0);
+    }
+
+    if flags.disable_background_apps {
+        const BG: &str =
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications";
+        snap.background_apps = reg_query_dword(BG, "GlobalUserDisabled");
+        reg_set_dword(BG, "GlobalUserDisabled", 1);
+    }
+
+    // MMCSS : laisse plus de CPU/réseau au jeu (HKLM, peut échouer sans admin).
+    if flags.mmcss_gaming {
+        const MM: &str =
+            r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile";
+        snap.system_responsiveness = reg_query_dword(MM, "SystemResponsiveness");
+        snap.network_throttling = reg_query_dword(MM, "NetworkThrottlingIndex");
+        reg_set_dword(MM, "SystemResponsiveness", 0);
+        reg_set_dword(MM, "NetworkThrottlingIndex", 0xffff_ffff);
     }
 
     if flags.stop_services {
@@ -199,6 +233,34 @@ pub fn restore(snap: &TweaksSnapshot) {
         reg_set_dword(
             r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
             "EnableTransparency",
+            v,
+        );
+    }
+    if let Some(v) = snap.widgets_taskbar {
+        reg_set_dword(
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
+            "TaskbarDa",
+            v,
+        );
+    }
+    if let Some(v) = snap.background_apps {
+        reg_set_dword(
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications",
+            "GlobalUserDisabled",
+            v,
+        );
+    }
+    if let Some(v) = snap.system_responsiveness {
+        reg_set_dword(
+            r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile",
+            "SystemResponsiveness",
+            v,
+        );
+    }
+    if let Some(v) = snap.network_throttling {
+        reg_set_dword(
+            r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile",
+            "NetworkThrottlingIndex",
             v,
         );
     }

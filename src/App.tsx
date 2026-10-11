@@ -10,6 +10,8 @@ import {
   Monitor,
   Settings2,
   Zap,
+  CheckSquare,
+  Square,
 } from "lucide-react";
 import { UpdateBar, UpdateProvider, UpdatesPanel } from "@/components/UpdateBar";
 import { PowerIgnition } from "@/components/PowerIgnition";
@@ -61,19 +63,49 @@ type Config = {
   disable_notifications: boolean;
   visual_effects_perf: boolean;
   disable_transparency: boolean;
+  disable_widgets: boolean;
+  disable_background_apps: boolean;
+  mmcss_gaming: boolean;
+  min_close_mb: number;
   reopen_closed_apps: boolean;
   overlay: OverlayConfig;
 };
 
-type Session = {
-  active: boolean;
-  closed: string[];
-  closed_names: string[];
-  freed_mb: number;
+type SystemInfo = {
+  cpu: string;
+  gpu: string;
+  ram_gb: number;
+  tips: string[];
 };
 
 type Tab = "session" | "apps" | "overlay" | "options";
 type AppSort = "ram" | "cpu";
+type AppFilter = "all" | "closable" | "kept";
+
+const KEEP_PRESETS: { id: string; label: string; keys: string[] }[] = [
+  { id: "discord", label: "Discord", keys: ["discord.exe"] },
+  {
+    id: "browsers",
+    label: "Navigateurs",
+    keys: ["chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe"],
+  },
+  {
+    id: "comms",
+    label: "Comms",
+    keys: ["discord.exe", "slack.exe", "teams.exe", "telegram.exe", "whatsapp.exe"],
+  },
+  {
+    id: "launchers",
+    label: "Launchers",
+    keys: [
+      "steam.exe",
+      "epicgameslauncher.exe",
+      "battle.net.exe",
+      "galaxyclient.exe",
+      "riotclientservices.exe",
+    ],
+  },
+];
 
 const TABS: { id: Tab; label: string; icon: typeof Zap }[] = [
   { id: "session", label: "Session", icon: Zap },
@@ -82,32 +114,44 @@ const TABS: { id: Tab; label: string; icon: typeof Zap }[] = [
   { id: "options", label: "Options", icon: Settings2 },
 ];
 
+type Session = {
+  active: boolean;
+  closed: string[];
+  closed_names: string[];
+  freed_mb: number;
+};
+
 export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [procs, setProcs] = useState<ProcGroup[]>([]);
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
+  const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
   const [monitorMode, setMonitorMode] = useState<"overlay" | "game">("overlay");
   const [tab, setTab] = useState<Tab>("session");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [appSort, setAppSort] = useState<AppSort>("ram");
+  const [appFilter, setAppFilter] = useState<AppFilter>("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [ignition, setIgnition] = useState<{
     freedMb: number;
     appsClosed: number;
   } | null>(null);
 
   const refresh = useCallback(async () => {
-    const [c, s, p, m] = await Promise.all([
+    const [c, s, p, m, info] = await Promise.all([
       invoke<Config>("get_config"),
       invoke<Session>("get_session"),
       invoke<ProcGroup[]>("list_processes"),
       invoke<MonitorInfo[]>("list_monitors").catch(() => [] as MonitorInfo[]),
+      invoke<SystemInfo>("get_system_info").catch(() => null),
     ]);
     setConfig(c);
     setSession(s);
     setProcs(p);
     setMonitors(m);
+    if (info) setSysInfo(info);
   }, []);
 
   // Liste processus : une fois au boot (chiffres Session), puis plus souvent sur Apps.
@@ -135,7 +179,6 @@ export default function App() {
     const merged = { ...config, ...next };
     setConfig(merged);
     await invoke("save_config", { config: merged });
-    setProcs(await invoke<ProcGroup[]>("list_processes"));
   };
 
   const patchOverlay = (next: Partial<OverlayConfig>) => {
@@ -143,9 +186,62 @@ export default function App() {
     patch({ overlay: { ...config.overlay, ...next } });
   };
 
+  const persistKeep = async (keep: string[]) => {
+    if (!config) return;
+    const merged = { ...config, keep };
+    setConfig(merged);
+    setProcs((prev) => prev.map((p) => ({ ...p, kept: keep.includes(p.key) })));
+    await invoke("save_config", { config: merged });
+  };
+
   const toggleKeep = (key: string, keep: boolean) => {
     if (!config) return;
-    patch({ keep: keep ? [...config.keep, key] : config.keep.filter((k) => k !== key) });
+    const next = keep
+      ? Array.from(new Set([...config.keep, key]))
+      : config.keep.filter((k) => k !== key);
+    void persistKeep(next);
+  };
+
+  const applyPreset = (keys: string[], enable: boolean) => {
+    if (!config) return;
+    let next = [...config.keep];
+    if (enable) {
+      for (const k of keys) {
+        if (!next.includes(k)) next.push(k);
+      }
+    } else {
+      next = next.filter((k) => !keys.includes(k));
+    }
+    void persistKeep(next);
+  };
+
+  const applyKeepSelection = (keep: boolean) => {
+    if (!config || selected.size === 0) return;
+    let next = [...config.keep];
+    for (const key of selected) {
+      if (keep && !next.includes(key)) next.push(key);
+      if (!keep) next = next.filter((k) => k !== key);
+    }
+    setSelected(new Set());
+    void persistKeep(next);
+  };
+
+  const applyAmdProfile = () => {
+    if (!config) return;
+    void patch({
+      high_performance: true,
+      ultimate_performance: true,
+      enable_game_mode: true,
+      disable_game_dvr: true,
+      disable_widgets: true,
+      disable_notifications: true,
+      visual_effects_perf: true,
+      disable_transparency: true,
+      disable_background_apps: true,
+      mmcss_gaming: true,
+      stop_services: true,
+      min_close_mb: 40,
+    });
   };
 
   const clearIgnition = useCallback(() => setIgnition(null), []);
@@ -175,22 +271,44 @@ export default function App() {
   const active = session?.active ?? false;
 
   const { closable, reclaimable } = useMemo(() => {
+    const minMb = config?.min_close_mb ?? 40;
     const list = procs.filter(
-      (p) => !p.protected && !p.kept && !(config?.protect_foreground && p.foreground)
+      (p) =>
+        !p.protected &&
+        !p.kept &&
+        !(config?.protect_foreground && p.foreground) &&
+        p.memory_mb >= minMb
     );
     return { closable: list.length, reclaimable: list.reduce((n, p) => n + p.memory_mb, 0) };
   }, [procs, config]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const list = procs.filter((p) => !p.protected && (!q || p.name.toLowerCase().includes(q)));
+    const minMb = config?.min_close_mb ?? 40;
+    let list = procs.filter((p) => !p.protected && (!q || p.name.toLowerCase().includes(q)));
+    if (appFilter === "kept") list = list.filter((p) => p.kept);
+    if (appFilter === "closable") {
+      list = list.filter(
+        (p) => !p.kept && !(config?.protect_foreground && p.foreground) && p.memory_mb >= minMb
+      );
+    }
     return [...list].sort((a, b) => {
+      if (a.kept !== b.kept) return a.kept ? -1 : 1;
       if (appSort === "cpu") {
         return b.cpu_pct - a.cpu_pct || b.memory_mb - a.memory_mb;
       }
       return b.memory_mb - a.memory_mb || b.cpu_pct - a.cpu_pct;
     });
-  }, [procs, query, appSort]);
+  }, [procs, query, appSort, appFilter, config]);
+
+  const toggleSelect = (key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   if (!config) {
     return (
@@ -307,6 +425,32 @@ export default function App() {
               />
             </div>
 
+            {sysInfo && (
+              <div className="rounded-2xl border border-line bg-surface/60 p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">
+                      Ta machine
+                    </p>
+                    <p className="mt-2 text-[13px] font-semibold text-paper">{sysInfo.cpu}</p>
+                    <p className="mt-0.5 text-[13px] text-muted">
+                      {sysInfo.gpu} · {sysInfo.ram_gb} Go RAM
+                    </p>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={applyAmdProfile}>
+                    Profil FPS sûr
+                  </Button>
+                </div>
+                <ul className="mt-4 space-y-1.5">
+                  {sysInfo.tips.slice(0, 3).map((t) => (
+                    <li key={t} className="text-[12px] leading-relaxed text-muted">
+                      · {t}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <p className="max-w-[42ch] text-[13px] leading-relaxed text-muted">
               Lance le mode pour fermer le superflu. Les réglages fins sont dans les autres
               onglets — ici, l'essentiel.
@@ -320,7 +464,7 @@ export default function App() {
               <div>
                 <h2 className="font-display text-lg font-semibold text-paper">Applications</h2>
                 <p className="mt-1 text-[13px] text-muted">
-                  Celles que tu gardes restent ouvertes pendant le jeu.
+                  Choisis ce qui reste ouvert. Les gardées apparaissent en premier.
                 </p>
               </div>
               <span className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] font-semibold text-muted">
@@ -328,8 +472,32 @@ export default function App() {
               </span>
             </div>
 
+            <div className="flex flex-wrap gap-1.5">
+              {KEEP_PRESETS.map((preset) => {
+                const on = preset.keys.every((k) => config.keep.includes(k));
+                const partial = !on && preset.keys.some((k) => config.keep.includes(k));
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => applyPreset(preset.keys, !on)}
+                    className={cn(
+                      "rounded-full border px-3 py-1.5 text-[12px] font-semibold transition-colors",
+                      on
+                        ? "border-brass/40 bg-brass/15 text-brass"
+                        : partial
+                          ? "border-jade/35 bg-jade/10 text-jade"
+                          : "border-line bg-surface/70 text-muted hover:text-paper"
+                    )}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="flex flex-wrap items-center gap-2">
-              <div className="relative min-w-[200px] flex-1">
+              <div className="relative min-w-[180px] flex-1">
                 <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
                 <Input
                   value={query}
@@ -337,6 +505,29 @@ export default function App() {
                   placeholder="Rechercher"
                   className="pl-11"
                 />
+              </div>
+              <div className="flex gap-1 rounded-xl border border-line bg-surface/70 p-1">
+                {(
+                  [
+                    ["all", "Toutes"],
+                    ["closable", "À fermer"],
+                    ["kept", "Gardées"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setAppFilter(id)}
+                    className={cn(
+                      "rounded-lg px-2.5 py-2 text-[12px] font-semibold transition-colors",
+                      appFilter === id
+                        ? "bg-raised text-paper shadow-[inset_0_0_0_1px_rgba(214,166,74,0.28)]"
+                        : "text-muted hover:text-paper"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
               <div className="flex gap-1 rounded-xl border border-line bg-surface/70 p-1">
                 {(
@@ -362,48 +553,98 @@ export default function App() {
               </div>
             </div>
 
+            {selected.size > 0 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-brass/30 bg-brass/10 px-3 py-2">
+                <span className="text-[12px] font-semibold text-brass">
+                  {selected.size} sélectionnée{selected.size > 1 ? "s" : ""}
+                </span>
+                <Button size="sm" onClick={() => applyKeepSelection(true)}>
+                  Garder
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => applyKeepSelection(false)}>
+                  Ne plus garder
+                </Button>
+                <button
+                  type="button"
+                  className="ml-auto text-[12px] text-muted hover:text-paper"
+                  onClick={() => setSelected(new Set())}
+                >
+                  Annuler
+                </button>
+              </div>
+            )}
+
             <div className="overflow-hidden rounded-2xl border border-line bg-surface/60">
               {visible.length === 0 ? (
                 <p className="px-4 py-10 text-center text-[13px] text-muted">
                   Aucune application ne correspond.
                 </p>
               ) : (
-                visible.map((p, i) => (
-                  <div
-                    key={p.key}
-                    className={cn(
-                      "flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-raised/70",
-                      i > 0 && "border-t border-line/80"
-                    )}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium text-paper">{p.name}</span>
-                        {p.foreground && config.protect_foreground && (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-brass/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brass">
-                            <Lock className="h-2.5 w-2.5" />
-                            Focus
-                          </span>
+                visible.map((p, i) => {
+                  const isSel = selected.has(p.key);
+                  return (
+                    <div
+                      key={p.key}
+                      className={cn(
+                        "flex items-center gap-3 px-3 py-3.5 transition-colors hover:bg-raised/70",
+                        i > 0 && "border-t border-line/80",
+                        p.kept && "bg-brass/[0.04]",
+                        isSel && "bg-brass/10"
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleSelect(p.key)}
+                        className="shrink-0 text-muted hover:text-brass"
+                        aria-label={isSel ? `Désélectionner ${p.name}` : `Sélectionner ${p.name}`}
+                      >
+                        {isSel ? (
+                          <CheckSquare className="h-4 w-4 text-brass" />
+                        ) : (
+                          <Square className="h-4 w-4" />
                         )}
-                      </div>
-                      <p className="mt-0.5 text-xs text-muted">
-                        <span className={cn(appSort === "ram" && "text-paper/80")}>
-                          {p.memory_mb} Mo
-                        </span>
-                        {" · "}
-                        <span className={cn(appSort === "cpu" && "text-paper/80")}>
-                          {Math.round(p.cpu_pct)}% CPU
-                        </span>
-                        {p.instances > 1 && ` · ${p.instances} processus`}
-                      </p>
+                      </button>
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 text-left"
+                        onClick={() => toggleKeep(p.key, !p.kept)}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm font-medium text-paper">{p.name}</span>
+                          {p.kept && (
+                            <span className="rounded-md bg-brass/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brass">
+                              Gardée
+                            </span>
+                          )}
+                          {p.foreground && config.protect_foreground && (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-brass/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brass">
+                              <Lock className="h-2.5 w-2.5" />
+                              Focus
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 text-xs text-muted">
+                          <span className={cn(appSort === "ram" && "text-paper/80")}>
+                            {p.memory_mb} Mo
+                          </span>
+                          {" · "}
+                          <span className={cn(appSort === "cpu" && "text-paper/80")}>
+                            {Math.round(p.cpu_pct)}% CPU
+                          </span>
+                          {p.instances > 1 && ` · ${p.instances} processus`}
+                          {!p.kept &&
+                            p.memory_mb < (config.min_close_mb ?? 40) &&
+                            " · sous seuil"}
+                        </p>
+                      </button>
+                      <Switch
+                        checked={p.kept}
+                        onCheckedChange={(v) => toggleKeep(p.key, v)}
+                        aria-label={`Garder ${p.name}`}
+                      />
                     </div>
-                    <Switch
-                      checked={p.kept}
-                      onCheckedChange={(v) => toggleKeep(p.key, v)}
-                      aria-label={`Garder ${p.name}`}
-                    />
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </section>
@@ -647,6 +888,24 @@ export default function App() {
                   onChange={(v) => patch({ disable_game_dvr: v })}
                 />
                 <OptionRow
+                  label="Couper les Widgets"
+                  hint="Masque le panneau Widgets de la barre des tâches."
+                  checked={config.disable_widgets}
+                  onChange={(v) => patch({ disable_widgets: v })}
+                />
+                <OptionRow
+                  label="Couper les apps en arrière-plan"
+                  hint="Limite les UWP / apps Store en fond."
+                  checked={config.disable_background_apps}
+                  onChange={(v) => patch({ disable_background_apps: v })}
+                />
+                <OptionRow
+                  label="MMCSS gaming"
+                  hint="Plus de CPU/réseau pour le jeu (admin recommandé)."
+                  checked={config.mmcss_gaming}
+                  onChange={(v) => patch({ mmcss_gaming: v })}
+                />
+                <OptionRow
                   label="Couper les notifications toast"
                   hint="Évite les pop-ups pendant la session."
                   checked={config.disable_notifications}
@@ -670,6 +929,28 @@ export default function App() {
                   checked={config.stop_services}
                   onChange={(v) => patch({ stop_services: v })}
                   last
+                />
+              </div>
+              <div className="mt-3 rounded-2xl border border-line bg-surface/60 px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[13px] font-semibold text-paper">Seuil de fermeture</p>
+                    <p className="mt-1 text-[12px] text-muted">
+                      Ignore les apps sous {config.min_close_mb ?? 40} Mo (plus rapide, moins de bruit).
+                    </p>
+                  </div>
+                  <span className="font-mono text-[13px] text-brass">
+                    {config.min_close_mb ?? 40} Mo
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  step={10}
+                  value={config.min_close_mb ?? 40}
+                  onChange={(e) => patch({ min_close_mb: Number(e.target.value) })}
+                  className="mt-3 w-full accent-[#D6A64A]"
                 />
               </div>
             </div>

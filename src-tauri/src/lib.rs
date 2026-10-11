@@ -113,6 +113,15 @@ pub struct Config {
     pub visual_effects_perf: bool,
     #[serde(default)]
     pub disable_transparency: bool,
+    #[serde(default = "default_true")]
+    pub disable_widgets: bool,
+    #[serde(default)]
+    pub disable_background_apps: bool,
+    #[serde(default)]
+    pub mmcss_gaming: bool,
+    /// Ignore les apps sous ce seuil (Mo) à la fermeture — moins de bruit, plus rapide.
+    #[serde(default = "default_min_close_mb")]
+    pub min_close_mb: u64,
     /// Si false, les apps fermées ne sont pas relancées à la sortie du mode jeu.
     #[serde(default = "default_true")]
     pub reopen_closed_apps: bool,
@@ -126,6 +135,10 @@ fn default_services() -> Vec<String> {
         "WSearch".into(),
         "DiagTrack".into(),
     ]
+}
+
+fn default_min_close_mb() -> u64 {
+    40
 }
 
 impl Default for Config {
@@ -148,6 +161,10 @@ impl Default for Config {
             disable_notifications: false,
             visual_effects_perf: false,
             disable_transparency: false,
+            disable_widgets: true,
+            disable_background_apps: false,
+            mmcss_gaming: false,
+            min_close_mb: default_min_close_mb(),
             reopen_closed_apps: true,
             overlay: OverlayConfig::default(),
         }
@@ -536,6 +553,9 @@ fn activate(app: AppHandle) -> Result<Session, String> {
         disable_notifications: cfg.disable_notifications,
         visual_effects_perf: cfg.visual_effects_perf,
         disable_transparency: cfg.disable_transparency,
+        disable_widgets: cfg.disable_widgets,
+        disable_background_apps: cfg.disable_background_apps,
+        mmcss_gaming: cfg.mmcss_gaming,
         stop_services: cfg.stop_services,
         services: cfg.services.clone(),
     });
@@ -543,6 +563,7 @@ fn activate(app: AppHandle) -> Result<Session, String> {
     session.stopped_services = snap.stopped_services.clone();
     session.tweaks = snap;
 
+    let min_mb = cfg.min_close_mb.max(0);
     let targets: Vec<&ProcGroup> = groups
         .iter()
         .filter(|g| {
@@ -550,6 +571,7 @@ fn activate(app: AppHandle) -> Result<Session, String> {
                 && !g.kept
                 && !is_safe_by_default(&g.key, &g.path)
                 && !(cfg.protect_foreground && g.foreground)
+                && g.memory_mb >= min_mb
         })
         .collect();
 
@@ -615,6 +637,9 @@ fn restore_session(app: &AppHandle) -> Session {
         || session.tweaks.transparency.is_some()
         || session.tweaks.game_dvr_app.is_some()
         || session.tweaks.toast_enabled.is_some()
+        || session.tweaks.widgets_taskbar.is_some()
+        || session.tweaks.background_apps.is_some()
+        || session.tweaks.system_responsiveness.is_some()
     {
         tweaks::restore(&session.tweaks);
     } else {
@@ -697,6 +722,98 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+#[derive(Serialize, Clone)]
+pub struct SystemInfo {
+    pub cpu: String,
+    pub gpu: String,
+    pub ram_gb: f32,
+    pub tips: Vec<String>,
+}
+
+static SYSINFO_CACHE: Mutex<Option<SystemInfo>> = Mutex::new(None);
+
+#[tauri::command]
+fn get_system_info() -> SystemInfo {
+    if let Ok(guard) = SYSINFO_CACHE.lock() {
+        if let Some(info) = guard.as_ref() {
+            return info.clone();
+        }
+    }
+
+    let cpu = run(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(Get-CimInstance Win32_Processor).Name",
+        ],
+    )
+    .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+    .filter(|s| !s.is_empty())
+    .unwrap_or_else(|| "CPU inconnu".into());
+
+    let gpu = run(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty Name)",
+        ],
+    )
+    .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+    .filter(|s| !s.is_empty())
+    .unwrap_or_else(|| "GPU inconnu".into());
+
+    let ram_gb = run(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[math]::Round(((Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum/1GB),1)",
+        ],
+    )
+    .and_then(|s| s.lines().find_map(|l| l.trim().parse::<f32>().ok()))
+    .unwrap_or(0.0);
+
+    let mut tips = Vec::new();
+    let cpu_l = cpu.to_lowercase();
+    let gpu_l = gpu.to_lowercase();
+
+    if ram_gb > 0.0 && ram_gb <= 16.5 {
+        tips.push(
+            "16 Go RAM : ferme navigateurs et apps lourdes ; garde Discord seulement si besoin."
+                .into(),
+        );
+    }
+    if gpu_l.contains("radeon") || gpu_l.contains("amd") {
+        tips.push(
+            "GPU AMD : Adrenalin à jour ; Anti-Lag/Chill off en compétitif pour max FPS.".into(),
+        );
+        tips.push("Coupe Game DVR + Widgets : overhead inutile sur une 7900 XTX.".into());
+    }
+    if cpu_l.contains("ryzen") {
+        tips.push(
+            "Ryzen : Ultimate Performance + Game Mode = gains stables sans overclock.".into(),
+        );
+    }
+    tips.push("MMCSS gaming : plus de budget CPU au jeu (admin recommandé).".into());
+    tips.push("Seuil 40 Mo : ignore les petits helpers inutiles à fermer.".into());
+
+    let info = SystemInfo {
+        cpu: cpu.trim().to_string(),
+        gpu: gpu.trim().to_string(),
+        ram_gb,
+        tips,
+    };
+    if let Ok(mut guard) = SYSINFO_CACHE.lock() {
+        *guard = Some(info.clone());
+    }
+    info
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run_app() {
     tauri::Builder::default()
@@ -738,6 +855,7 @@ pub fn run_app() {
             get_metrics,
             get_overlay_config,
             toggle_overlay_visibility,
+            get_system_info,
             activate,
             restore
         ])
