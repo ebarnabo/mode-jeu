@@ -508,6 +508,14 @@ fn save_config(app: AppHandle, config: Config) {
 }
 
 #[tauri::command]
+fn ensure_game_watch(app: AppHandle) {
+    let cfg = load_config(&app);
+    if cfg.watch_games {
+        games::start_watcher(app);
+    }
+}
+
+#[tauri::command]
 fn get_session(app: AppHandle) -> Session {
     sanitize_session(&app)
 }
@@ -896,7 +904,10 @@ pub fn run_app() {
             let _ = sanitize_session(app.handle());
             let cfg = load_config(app.handle());
             sync_from_config(app.handle(), &cfg);
-            games::start_watcher(app.handle().clone());
+            // Watcher jeux : seulement si l’utilisateur a déjà choisi des autos.
+            if cfg.watch_games && !cfg.auto_game_exes.is_empty() {
+                games::start_watcher(app.handle().clone());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -928,6 +939,7 @@ pub fn run_app() {
             optimize_volume,
             analyze_fragmentation,
             improve_volume,
+            ensure_game_watch,
             activate,
             restore
         ])

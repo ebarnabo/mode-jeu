@@ -94,13 +94,6 @@ type GameDetected = {
   source: string;
 };
 
-type SystemInfo = {
-  cpu: string;
-  gpu: string;
-  ram_gb: number;
-  tips: string[];
-};
-
 type Tab = "session" | "apps" | "jeux" | "pc" | "overlay" | "options";
 type AppSort = "ram" | "cpu";
 type AppFilter = "all" | "closable" | "kept";
@@ -151,7 +144,6 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [procs, setProcs] = useState<ProcGroup[]>([]);
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
-  const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
   const [monitorMode, setMonitorMode] = useState<"overlay" | "game">("overlay");
   const [tab, setTab] = useState<Tab>("session");
   const [query, setQuery] = useState("");
@@ -164,38 +156,33 @@ export default function App() {
     appsClosed: number;
   } | null>(null);
   const [games, setGames] = useState<GameEntry[]>([]);
+  const [gamesLoaded, setGamesLoaded] = useState(false);
+  const [gamesBusy, setGamesBusy] = useState(false);
   const [gameQuery, setGameQuery] = useState("");
   const [prompt, setPrompt] = useState<GameDetected | null>(null);
 
   const refresh = useCallback(async () => {
-    const [c, s, p, m, info] = await Promise.all([
+    const [c, s] = await Promise.all([
       invoke<Config>("get_config"),
       invoke<Session>("get_session"),
-      invoke<ProcGroup[]>("list_processes"),
-      invoke<MonitorInfo[]>("list_monitors").catch(() => [] as MonitorInfo[]),
-      invoke<SystemInfo>("get_system_info").catch(() => null),
     ]);
     setConfig(c);
     setSession(s);
-    setProcs(p);
-    setMonitors(m);
-    if (info) setSysInfo(info);
   }, []);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  // Liste process uniquement quand Apps / Jeux est ouvert — zéro polling ailleurs.
   useEffect(() => {
-    if (busy || (tab !== "apps" && tab !== "jeux")) return;
+    if (busy || tab !== "apps") return;
     invoke<ProcGroup[]>("list_processes").then(setProcs).catch(() => {});
   }, [tab, busy]);
 
   useEffect(() => {
-    if (tab !== "jeux") return;
-    invoke<GameEntry[]>("list_games").then(setGames).catch(() => {});
-  }, [tab]);
+    if (tab !== "overlay" || monitors.length > 0) return;
+    invoke<MonitorInfo[]>("list_monitors").then(setMonitors).catch(() => {});
+  }, [tab, monitors.length]);
 
   useEffect(() => {
     let stop = false;
@@ -312,6 +299,24 @@ export default function App() {
     void persistKeep(next);
   };
 
+  const loadGames = async () => {
+    setGamesBusy(true);
+    try {
+      if (config?.watch_games !== false) {
+        await invoke("ensure_game_watch");
+      }
+      const [g, p] = await Promise.all([
+        invoke<GameEntry[]>("list_games"),
+        invoke<ProcGroup[]>("list_processes"),
+      ]);
+      setGames(g);
+      setProcs(p);
+      setGamesLoaded(true);
+    } finally {
+      setGamesBusy(false);
+    }
+  };
+
   const applyAmdProfile = () => {
     if (!config) return;
     void patch({
@@ -355,18 +360,6 @@ export default function App() {
   };
 
   const active = session?.active ?? false;
-
-  const { closable, reclaimable } = useMemo(() => {
-    const minMb = config?.min_close_mb ?? 40;
-    const list = procs.filter(
-      (p) =>
-        !p.protected &&
-        !p.kept &&
-        !(config?.protect_foreground && p.foreground) &&
-        p.memory_mb >= minMb
-    );
-    return { closable: list.length, reclaimable: list.reduce((n, p) => n + p.memory_mb, 0) };
-  }, [procs, config]);
 
   const visibleGames = useMemo(() => {
     const q = gameQuery.trim().toLowerCase();
@@ -447,16 +440,12 @@ export default function App() {
       {prompt && !active && (
         <div className="absolute inset-0 z-50 flex items-end justify-center bg-ink/70 p-6 backdrop-blur-sm sm:items-center">
           <div className="w-full max-w-[420px] overflow-hidden rounded-[28px] border border-brass/30 bg-gradient-to-br from-raised via-surface to-ink p-6 shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-brass/80">
-              {prompt.source} · jeu détecté
-            </p>
-            <h2 className="mt-3 font-display text-[32px] font-semibold leading-[0.95] tracking-tight text-paper">
+            <h2 className="font-display text-[32px] font-semibold leading-[0.95] tracking-tight text-paper">
               {prompt.name}
             </h2>
             <p className="mt-3 text-[13px] leading-relaxed text-muted">
-              Activer le mode jeu maintenant ? Les apps inutiles se ferment, la session se prépare.
+              Ce jeu vient de s’ouvrir. Fermer le superflu et activer le mode jeu ?
             </p>
-            <p className="mt-2 font-mono text-[11px] text-muted/80">{prompt.exe}</p>
             <div className="mt-6 flex flex-col gap-2">
               <Button
                 size="lg"
@@ -481,14 +470,14 @@ export default function App() {
                   void run("activate");
                 }}
               >
-                Toujours auto pour ce jeu
+                Toujours auto
               </Button>
               <button
                 type="button"
                 className="py-2 text-[13px] font-semibold text-muted hover:text-paper"
                 onClick={() => setPrompt(null)}
               >
-                Pas maintenant
+                Ignorer
               </button>
             </div>
           </div>
@@ -499,16 +488,13 @@ export default function App() {
         className="relative z-10 flex items-start justify-between gap-4 px-7 pb-4 pt-7"
       >
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-brass/80">
-            Mode Jeu
-          </p>
-          <h1 className="mt-1 font-display text-[28px] font-semibold leading-none tracking-tight text-paper">
+          <h1 className="font-display text-[28px] font-semibold leading-none tracking-tight text-paper">
             {active ? "Session active" : "Prêt à jouer"}
           </h1>
           <p className="mt-2 text-[13px] text-muted">
             {active
               ? `${session?.closed_names.length ?? 0} apps en pause · ${session!.freed_mb} Mo libérés`
-              : `${closable} apps · ${reclaimable} Mo récupérables`}
+              : "Le superflu se ferme à l’activation. Rien n’est scanné tant que tu n’ouvres pas un onglet."}
           </p>
         </div>
         <div
@@ -551,92 +537,19 @@ export default function App() {
       <main className="scroll-area relative z-10 flex-1 overflow-y-auto px-7" style={{ paddingBottom: 132 }}>
         {tab === "session" && (
           <section className="animate-rise space-y-6">
-            <div className="relative overflow-hidden rounded-[28px] border border-line bg-gradient-to-br from-raised via-surface to-ink p-7">
-              <div className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-brass/10 blur-3xl" />
-              <div className="relative grid gap-8 sm:grid-cols-2">
-                <Stat
-                  value={active ? session!.freed_mb : reclaimable}
-                  unit="Mo"
-                  label={active ? "Mémoire libérée" : "Mémoire récupérable"}
-                  accent
-                />
-                <Stat
-                  value={active ? session!.closed_names.length : closable}
-                  label={active ? "Applications fermées" : "Applications à fermer"}
-                />
-              </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <SummaryChip
-                on={config.high_performance}
-                title="Perf. élevées"
-                detail="Plan d'alimentation"
-              />
-              <SummaryChip
-                on={config.overlay.enabled}
-                title="Overlay"
-                detail={config.overlay.enabled ? "Actif en session" : "Désactivé"}
-                onClick={() => setTab("overlay")}
-              />
-              <SummaryChip
-                on={config.keep.length > 0}
-                title={`${config.keep.length} gardées`}
-                detail="Apps protégées"
-                onClick={() => setTab("apps")}
-              />
-              <SummaryChip
-                on={config.watch_games !== false}
-                title={
-                  (config.auto_game_exes ?? []).length > 0
-                    ? `${config.auto_game_exes.length} auto`
-                    : "Détection jeux"
-                }
-                detail={
-                  config.watch_games !== false
-                    ? "Demande ou auto au lancement"
-                    : "Surveillance off"
-                }
-                onClick={() => setTab("jeux")}
-              />
-              <SummaryChip
-                on
-                title="Logiciels"
-                detail="Installés · analyse"
-                onClick={() => setTab("pc")}
-              />
-            </div>
-
-            {sysInfo && (
-              <div className="rounded-2xl border border-line bg-surface/60 p-5">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">
-                      Ta machine
-                    </p>
-                    <p className="mt-2 text-[13px] font-semibold text-paper">{sysInfo.cpu}</p>
-                    <p className="mt-0.5 text-[13px] text-muted">
-                      {sysInfo.gpu} · {sysInfo.ram_gb} Go RAM
-                    </p>
-                  </div>
-                  <Button size="sm" variant="outline" onClick={applyAmdProfile}>
-                    Profil FPS sûr
-                  </Button>
+            {active ? (
+              <div className="relative overflow-hidden rounded-[28px] border border-line bg-gradient-to-br from-raised via-surface to-ink p-7">
+                <div className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-brass/10 blur-3xl" />
+                <div className="relative grid gap-8 sm:grid-cols-2">
+                  <Stat value={session!.freed_mb} unit="Mo" label="Mémoire libérée" accent />
+                  <Stat value={session!.closed_names.length} label="Apps en pause" />
                 </div>
-                <ul className="mt-4 space-y-1.5">
-                  {sysInfo.tips.slice(0, 3).map((t) => (
-                    <li key={t} className="text-[12px] leading-relaxed text-muted">
-                      · {t}
-                    </li>
-                  ))}
-                </ul>
               </div>
+            ) : (
+              <p className="max-w-[42ch] text-[15px] leading-relaxed text-muted">
+                Un bouton. Steam, Discord et Windows restent. Le reste se coupe le temps de jouer.
+              </p>
             )}
-
-            <p className="max-w-[42ch] text-[13px] leading-relaxed text-muted">
-              Lance le mode pour fermer le superflu. Les réglages fins sont dans les autres
-              onglets — ici, l'essentiel.
-            </p>
           </section>
         )}
 
@@ -644,13 +557,13 @@ export default function App() {
           <section className="animate-rise space-y-4">
             <div className="flex items-end justify-between gap-4">
               <div>
-                <h2 className="font-display text-lg font-semibold text-paper">Applications</h2>
+                <h2 className="font-display text-lg font-semibold text-paper">À garder</h2>
                 <p className="mt-1 text-[13px] text-muted">
-                  Choisis ce qui reste ouvert. Les gardées apparaissent en premier.
+                  Ces apps restent ouvertes pendant le mode jeu.
                 </p>
               </div>
               <span className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] font-semibold text-muted">
-                {config.keep.length} gardées
+                {config.keep.length} à garder
               </span>
             </div>
 
@@ -834,34 +747,43 @@ export default function App() {
 
         {tab === "jeux" && (
           <section className="animate-rise space-y-5">
-            <div className="flex items-end justify-between gap-4">
-              <div>
-                <h2 className="font-display text-lg font-semibold text-paper">Jeux</h2>
-                <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
-                  Steam, Epic, et les process ouverts. Auto = mode jeu sans demander. Les autres
-                  jeux détectés proposent d’activer.
-                </p>
-              </div>
-              <span className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] font-semibold text-muted">
-                {(config.auto_game_exes ?? []).length} auto
-              </span>
+            <div>
+              <h2 className="font-display text-lg font-semibold text-paper">Jeux</h2>
+              <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
+                Auto = activation sans demander. Sinon, Mode Jeu propose d’activer.
+              </p>
             </div>
 
             <div className="rounded-2xl border border-line bg-surface/60 px-5 py-4">
               <Setting
-                label="Détecter les lancements"
-                hint="Demande d’activer quand un jeu connu s’ouvre. Zéro scan pendant une session."
+                label="Surveiller les lancements"
+                hint="Off : aucun scan en fond. On : demande ou auto quand un jeu s’ouvre."
                 checked={config.watch_games !== false}
-                onChange={(v) => patch({ watch_games: v })}
+                onChange={(v) => {
+                  void patch({ watch_games: v });
+                  if (v) void invoke("ensure_game_watch");
+                }}
               />
             </div>
 
+            {!gamesLoaded ? (
+              <div className="rounded-2xl border border-dashed border-line px-5 py-10 text-center">
+                <p className="text-[13px] text-muted">
+                  Steam, Epic et les jeux ouverts. Rien n’est lu tant que tu n’as pas cherché.
+                </p>
+                <Button className="mt-5" onClick={() => void loadGames()} disabled={gamesBusy}>
+                  {gamesBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                  Chercher les jeux
+                </Button>
+              </div>
+            ) : (
+              <>
             <div className="relative">
               <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
               <Input
                 value={gameQuery}
                 onChange={(e) => setGameQuery(e.target.value)}
-                placeholder="Filtrer un jeu"
+                placeholder="Filtrer"
                 className="pl-11"
               />
             </div>
@@ -869,7 +791,7 @@ export default function App() {
             <div className="overflow-hidden rounded-2xl border border-line bg-surface/60">
               {visibleGames.length === 0 ? (
                 <p className="px-4 py-10 text-center text-[13px] text-muted">
-                  Aucun jeu trouvé. Lance Steam ou ajoute un process ouvert ci-dessous.
+                  Aucun jeu. Installe Steam/Epic, ou ajoute un process ouvert.
                 </p>
               ) : (
                 visibleGames.map((g, i) => {
@@ -913,9 +835,9 @@ export default function App() {
 
             {openCandidates.length > 0 && (
               <div>
-                <h3 className="mb-2 text-[13px] font-semibold text-paper">Processus ouverts</h3>
+                <h3 className="mb-2 text-[13px] font-semibold text-paper">Déjà ouvert</h3>
                 <p className="mb-3 text-[12px] text-muted">
-                  Pas dans Steam / Epic ? Ajoute-le pour le détecter au prochain lancement.
+                  Pas dans Steam / Epic : ajoute-le pour le reconnaître au prochain lancement.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {openCandidates.map((p) => (
@@ -932,6 +854,8 @@ export default function App() {
                 </div>
               </div>
             )}
+              </>
+            )}
           </section>
         )}
 
@@ -942,22 +866,21 @@ export default function App() {
             <div>
               <h2 className="font-display text-lg font-semibold text-paper">Overlay</h2>
               <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
-                Panneau léger sur un écran, FPS lus sur l'écran de jeu. Une lecture par seconde
-                environ.
+                Panneau CPU / GPU / FPS pendant le jeu. Inactif tant que tu ne l’allumes pas.
               </p>
             </div>
 
             <div className="space-y-4 rounded-2xl border border-line bg-surface/60 p-5">
               <Setting
-                label="Activer l'overlay"
-                hint="Pendant le mode jeu, ou toujours si tu l'actives ci-dessous."
+                label="Montrer l’overlay"
+                hint="Pendant le mode jeu uniquement, sauf si tu actives la ligne suivante."
                 checked={config.overlay.enabled}
                 onChange={(v) => patchOverlay({ enabled: v, hidden: false })}
               />
               <Divider />
               <Setting
-                label="Aussi hors mode jeu"
-                hint="Le panneau reste visible en veille."
+                label="Garder hors session"
+                hint="Le panneau reste à l’écran même en veille."
                 checked={config.overlay.always}
                 onChange={(v) => patchOverlay({ always: v })}
               />
@@ -981,9 +904,7 @@ export default function App() {
             </div>
 
             <div>
-              <p className="mb-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-muted">
-                Métriques
-              </p>
+              <p className="mb-3 text-[13px] font-semibold text-paper">Métriques</p>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {(
                   [
@@ -1013,9 +934,7 @@ export default function App() {
 
             <div className="grid gap-5 sm:grid-cols-2">
               <div className="rounded-2xl border border-line bg-surface/60 p-5">
-                <p className="mb-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-muted">
-                  Coin
-                </p>
+                <p className="mb-3 text-[13px] font-semibold text-paper">Coin</p>
                 <div className="grid grid-cols-2 gap-2">
                   {(
                     [
@@ -1045,9 +964,7 @@ export default function App() {
               <div className="space-y-5 rounded-2xl border border-line bg-surface/60 p-5">
                 <div>
                   <div className="mb-2 flex items-center justify-between">
-                    <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-muted">
-                      Opacité
-                    </p>
+                    <p className="text-[13px] font-semibold text-paper">Opacité</p>
                     <span className="font-mono text-[12px] text-paper">
                       {config.overlay.opacity}%
                     </span>
@@ -1062,9 +979,7 @@ export default function App() {
                   />
                 </div>
                 <div>
-                  <p className="mb-2 text-[12px] font-semibold uppercase tracking-[0.14em] text-muted">
-                    Rafraîchissement
-                  </p>
+                  <p className="mb-2 text-[13px] font-semibold text-paper">Rafraîchissement</p>
                   <div className="flex gap-2">
                     {[
                       [1000, "1s"],
@@ -1097,19 +1012,22 @@ export default function App() {
             <div>
               <h2 className="font-display text-lg font-semibold text-paper">Options</h2>
               <p className="mt-1 text-[13px] text-muted">
-                Tweaks appliqués à l’activation, restaurés à la sortie.
+                Appliqués à l’activation, annulés à la sortie.
               </p>
             </div>
             <UpdatesPanel gameMode={active} />
+            <div className="flex justify-end">
+              <Button size="sm" variant="outline" onClick={applyAmdProfile}>
+                Profil FPS sûr
+              </Button>
+            </div>
 
             <div>
-              <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">
-                Session
-              </p>
+              <p className="mb-2 px-1 text-[13px] font-semibold text-paper">Session</p>
               <div className="space-y-0 overflow-hidden rounded-2xl border border-line bg-surface/60">
                 <OptionRow
                   label="Protéger la fenêtre au premier plan"
-                  hint="Le jeu déjà ouvert n'est jamais fermé."
+                  hint="Le jeu déjà ouvert n’est jamais fermé."
                   checked={config.protect_foreground}
                   onChange={(v) => patch({ protect_foreground: v })}
                 />
@@ -1136,9 +1054,7 @@ export default function App() {
             </div>
 
             <div>
-              <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">
-                Performances jeu
-              </p>
+              <p className="mb-2 px-1 text-[13px] font-semibold text-paper">Performances</p>
               <div className="space-y-0 overflow-hidden rounded-2xl border border-line bg-surface/60">
                 <OptionRow
                   label="Plan Performances élevées"
@@ -1296,40 +1212,6 @@ function Stat({
       <p className="mt-3 text-[13px] text-muted">{label}</p>
     </div>
   );
-}
-
-function SummaryChip({
-  on,
-  title,
-  detail,
-  onClick,
-}: {
-  on: boolean;
-  title: string;
-  detail: string;
-  onClick?: () => void;
-}) {
-  const className = cn(
-    "rounded-2xl border border-line bg-surface/70 px-4 py-3 text-left transition-colors",
-    onClick && "hover:border-muted/40 hover:bg-raised"
-  );
-  const body = (
-    <>
-      <div className="flex items-center gap-2">
-        <span className={cn("h-1.5 w-1.5 rounded-full", on ? "bg-jade" : "bg-muted/50")} />
-        <p className="text-[13px] font-semibold text-paper">{title}</p>
-      </div>
-      <p className="mt-1 text-[12px] text-muted">{detail}</p>
-    </>
-  );
-  if (onClick) {
-    return (
-      <button type="button" onClick={onClick} className={className}>
-        {body}
-      </button>
-    );
-  }
-  return <div className={className}>{body}</div>;
 }
 
 function Setting({

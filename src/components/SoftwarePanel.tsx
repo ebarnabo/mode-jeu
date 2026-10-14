@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Loader2, Search, Sparkles, Trash2, Lock, Package } from "lucide-react";
+import { Loader2, Search, Trash2, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DisksPanel } from "@/components/DisksPanel";
@@ -40,7 +40,7 @@ type AnalyzeReport = {
 type View = "disks" | "installed" | "open";
 
 export function SoftwarePanel() {
-  const [view, setView] = useState<View>("disks");
+  const [view, setView] = useState<View | null>(null);
   const [apps, setApps] = useState<InstalledApp[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -56,7 +56,7 @@ export function SoftwarePanel() {
     try {
       setApps(await invoke<InstalledApp[]>("list_installed"));
     } catch {
-      setError("Lecture du registre Windows impossible.");
+      setError("Impossible de lire les logiciels installés.");
     } finally {
       setLoading(false);
     }
@@ -76,7 +76,10 @@ export function SoftwarePanel() {
     );
   }, [apps, query]);
 
-  const removable = apps.filter((a) => a.can_uninstall).length;
+  const openView = (next: View) => {
+    setView(next);
+    if (next === "open" && !report) void runAnalyze();
+  };
 
   const runAnalyze = async () => {
     setAnalyzing(true);
@@ -85,7 +88,7 @@ export function SoftwarePanel() {
     try {
       setReport(await invoke<AnalyzeReport>("analyze_open_apps"));
     } catch {
-      setError("Scan des applications ouvertes impossible.");
+      setError("Impossible de lire les apps ouvertes.");
     } finally {
       setAnalyzing(false);
     }
@@ -100,7 +103,11 @@ export function SoftwarePanel() {
       setPending(null);
       await refreshInstalled();
     } catch (e) {
-      setError(typeof e === "string" ? e : "Désinstallation refusée ou désinstalleur introuvable.");
+      setError(
+        typeof e === "string"
+          ? e
+          : "Le désinstalleur n’a pas démarré. Réessaie, ou lance Mode Jeu en administrateur."
+      );
     } finally {
       setBusyId(null);
     }
@@ -108,38 +115,10 @@ export function SoftwarePanel() {
 
   return (
     <section className="animate-rise space-y-5">
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <h2 className="font-display text-lg font-semibold text-paper">Logiciels</h2>
-          <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
-            Disques (SMART réel), logiciels installés, analyse des process ouverts.
-          </p>
-        </div>
-        <span className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] font-semibold text-muted">
-          {apps.length} installées
-        </span>
-      </div>
-
-      <div className="relative overflow-hidden rounded-[28px] border border-line bg-gradient-to-br from-raised via-surface to-ink p-6">
-        <div className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full bg-brass/10 blur-3xl" />
-        <div className="relative flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <p className="font-display text-[44px] font-semibold leading-none tracking-tighter text-brass">
-              {removable}
-            </p>
-            <p className="mt-2 text-[13px] text-muted">désinstallables proprement</p>
-          </div>
-          <Button onClick={() => void runAnalyze()} disabled={analyzing}>
-            {analyzing ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Sparkles className="h-4 w-4" />
-            )}
-            Analyser les apps ouvertes
-          </Button>
-        </div>
-        <p className="relative mt-4 max-w-[54ch] text-[12px] leading-relaxed text-muted">
-          {ANALYZE_HINT}
+      <div>
+        <h2 className="font-display text-lg font-semibold text-paper">PC</h2>
+        <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
+          Rien ne tourne tant que tu n’as pas choisi une action.
         </p>
       </div>
 
@@ -147,14 +126,14 @@ export function SoftwarePanel() {
         {(
           [
             ["disks", "Disques"],
-            ["installed", "Installées"],
-            ["open", "Ouvertes"],
+            ["installed", "Logiciels"],
+            ["open", "Classer"],
           ] as const
         ).map(([id, label]) => (
           <button
             key={id}
             type="button"
-            onClick={() => setView(id)}
+            onClick={() => openView(id)}
             className={cn(
               "flex-1 rounded-xl px-3 py-2.5 text-[13px] font-semibold transition-colors",
               view === id
@@ -166,6 +145,12 @@ export function SoftwarePanel() {
           </button>
         ))}
       </div>
+
+      {view === null && (
+        <p className="px-1 text-[13px] text-muted">
+          Disques : santé SMART. Logiciels : désinstall propre. Classer : utile / à retirer / intouchable.
+        </p>
+      )}
 
       {error && (
         <p className="rounded-xl border border-[#E8A07A]/30 bg-[#E8A07A]/10 px-4 py-3 text-[13px] text-[#E8A07A]">
@@ -245,12 +230,7 @@ export function SoftwarePanel() {
       {view === "open" && (
         <div className="space-y-4">
           {!report && !analyzing && (
-            <div className="rounded-2xl border border-dashed border-line px-5 py-10 text-center">
-              <Package className="mx-auto h-6 w-6 text-brass" />
-              <p className="mt-3 text-[13px] text-muted">
-                Lance l’analyse pour classer tout ce qui tourne en ce moment.
-              </p>
-            </div>
+            <p className="px-1 text-[13px] text-muted">Lecture des process ouverts…</p>
           )}
           {analyzing && (
             <div className="flex justify-center py-12">
@@ -300,15 +280,11 @@ export function SoftwarePanel() {
       {pending && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/70 p-6 backdrop-blur-sm sm:items-center">
           <div className="w-full max-w-[400px] rounded-[28px] border border-line bg-gradient-to-br from-raised via-surface to-ink p-6">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-brass/80">
-              Désinstall propre
-            </p>
-            <h3 className="mt-3 font-display text-[26px] font-semibold leading-tight tracking-tight text-paper">
+            <h3 className="font-display text-[26px] font-semibold leading-tight tracking-tight text-paper">
               {pending.name}
             </h3>
             <p className="mt-3 text-[13px] leading-relaxed text-muted">
-              Windows lance le désinstalleur officiel — pas de suppression brute des fichiers.
-              Confirme dans la fenêtre qui s’ouvre.
+              Windows ouvre le désinstalleur officiel. Confirme dans cette fenêtre-là.
             </p>
             <div className="mt-6 flex flex-col gap-2">
               <Button disabled={!!busyId} onClick={() => void confirmUninstall()}>
@@ -329,9 +305,6 @@ export function SoftwarePanel() {
     </section>
   );
 }
-
-const ANALYZE_HINT =
-  "Prompt intégré : ces apps sont-elles utiles ? lesquelles retirer d’urgence, lesquelles ne pas toucher, lesquelles sont impossibles à désinstaller ? En cas de doute, on ne propose pas la suppression.";
 
 function AdviceGroup({
   title,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Loader2, Sparkles, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -45,26 +45,24 @@ type DiskJob = {
 
 export function DisksPanel() {
   const [disks, setDisks] = useState<PhysicalDisk[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [started, setStarted] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [log, setLog] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    setStarted(true);
     setLoading(true);
     setError(null);
     try {
       setDisks(await invoke<PhysicalDisk[]>("list_disks"));
     } catch {
-      setError("Lecture SMART / volumes impossible.");
+      setError("Impossible de lire le SMART. Réessaie, ou lance l’app en administrateur.");
     } finally {
       setLoading(false);
     }
   }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
 
   const runJob = async (cmd: "optimize_volume" | "improve_volume" | "analyze_fragmentation", letter: string) => {
     setBusy(`${cmd}:${letter}`);
@@ -81,6 +79,19 @@ export function DisksPanel() {
     }
   };
 
+  if (!started) {
+    return (
+      <div className="rounded-2xl border border-dashed border-line px-5 py-10 text-center">
+        <p className="text-[13px] text-muted">
+          Température, usure, spare. Aucune lecture tant que tu n’as pas demandé.
+        </p>
+        <Button className="mt-5" onClick={() => void refresh()}>
+          Lire la santé
+        </Button>
+      </div>
+    );
+  }
+
   if (loading && disks.length === 0) {
     return (
       <div className="flex justify-center py-12">
@@ -91,9 +102,8 @@ export function DisksPanel() {
 
   return (
     <div className="space-y-4">
-      <p className="text-[12px] leading-relaxed text-muted">
-        Relevés firmware : log NVMe SMART 02h, ATA SMART via PredictFailure Windows. Pas un score inventé.
-        SSD = TRIM. HDD = défrag seulement si c’est mécanique.
+      <p className="text-[13px] leading-relaxed text-muted">
+        SMART firmware. SSD : TRIM. HDD : défrag si mécanique.
       </p>
 
       {error && (
@@ -116,7 +126,7 @@ export function DisksPanel() {
           <div className="p-5">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">
+                <p className="text-[12px] text-muted">
                   {d.kind} · {d.bus} · {d.source}
                 </p>
                 <h3 className="mt-1 truncate font-display text-[20px] font-semibold tracking-tight text-paper">
@@ -250,7 +260,7 @@ export function DisksPanel() {
 function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div>
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">{label}</p>
+      <p className="text-[11px] font-medium text-muted">{label}</p>
       <p className="mt-1 font-display text-[22px] font-semibold leading-none tracking-tight text-paper">
         {value}
       </p>
