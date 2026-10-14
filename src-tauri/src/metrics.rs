@@ -49,8 +49,8 @@ impl Sampler {
     fn new() -> Self {
         let mut sys = System::new_with_specifics(
             RefreshKind::new()
-                .with_cpu(CpuRefreshKind::everything())
-                .with_memory(MemoryRefreshKind::everything()),
+                .with_cpu(CpuRefreshKind::new().without_frequency())
+                .with_memory(MemoryRefreshKind::new().with_ram()),
         );
         sys.refresh_cpu_usage();
         Self {
@@ -126,10 +126,10 @@ fn ensure_sampler() {
             loop {
                 if SAMPLING.load(Ordering::Relaxed) {
                     tick(&mut s);
-                    std::thread::sleep(Duration::from_millis(1000));
+                    std::thread::sleep(Duration::from_millis(2000));
                 } else {
                     // Overlay off : idle quasi gratuit.
-                    std::thread::sleep(Duration::from_millis(2500));
+                    std::thread::sleep(Duration::from_millis(8000));
                 }
             }
         })
@@ -140,26 +140,26 @@ fn tick(s: &mut Sampler) {
     let now = Instant::now();
     let mon = MONITOR.lock().ok().and_then(|g| *g);
 
-    if now.duration_since(s.last_cpu) >= Duration::from_millis(900) {
+    if now.duration_since(s.last_cpu) >= Duration::from_millis(1800) {
         s.sys.refresh_cpu_usage();
         s.sys.refresh_memory();
         s.last_cpu = now;
     }
 
-    if now.duration_since(s.last_gpu) >= Duration::from_secs(2) {
+    if now.duration_since(s.last_gpu) >= Duration::from_secs(4) {
         let (util, temp) = query_gpu(s);
         s.gpu_pct = util;
         s.gpu_temp = temp;
         s.last_gpu = now;
     }
 
-    if now.duration_since(s.last_temp) >= Duration::from_secs(4) {
+    if now.duration_since(s.last_temp) >= Duration::from_secs(8) {
         s.components.refresh();
         s.cpu_temp = cpu_temp_from_components(&s.components);
         s.last_temp = now;
     }
 
-    if now.duration_since(s.last_fps) >= Duration::from_millis(1200) {
+    if now.duration_since(s.last_fps) >= Duration::from_millis(2000) {
         s.fps = query_fps(s, mon);
         s.last_fps = now;
     }

@@ -154,24 +154,14 @@ export default function App() {
     if (info) setSysInfo(info);
   }, []);
 
-  // Liste processus : une fois au boot (chiffres Session), puis plus souvent sur Apps.
   useEffect(() => {
     refresh();
   }, [refresh]);
 
+  // Liste process uniquement quand l'onglet Apps est ouvert — zéro polling ailleurs.
   useEffect(() => {
-    if (busy) return;
-    const tick = () => {
-      invoke<ProcGroup[]>("list_processes").then(setProcs).catch(() => {});
-    };
-    if (tab === "apps") {
-      tick();
-      const id = setInterval(tick, 10000);
-      return () => clearInterval(id);
-    }
-    // Hors Apps : refresh léger occasionnel pour les totaux Session.
-    const id = setInterval(tick, 30000);
-    return () => clearInterval(id);
+    if (busy || tab !== "apps") return;
+    invoke<ProcGroup[]>("list_processes").then(setProcs).catch(() => {});
   }, [tab, busy]);
 
   const patch = async (next: Partial<Config>) => {

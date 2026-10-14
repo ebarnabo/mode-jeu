@@ -55,7 +55,7 @@ export default function OverlayApp() {
       }
     };
     tick();
-    const id = window.setInterval(tick, Math.max(1000, cfg.interval_ms || 2000));
+    const id = window.setInterval(tick, Math.max(2000, cfg.interval_ms || 2000));
     const onVis = () => {
       if (!document.hidden) void tick();
     };

@@ -348,12 +348,8 @@ fn with_proc_sys<R>(f: impl FnOnce(&mut System) -> R) -> R {
 
 fn scan(cfg: &Config, with_cpu: bool) -> Vec<ProcGroup> {
     with_proc_sys(|sys| {
-        sys.refresh_processes(ProcessesToUpdate::All, true);
-        if with_cpu {
-            // Double refresh pour des % CPU exploitables (sysinfo).
-            std::thread::sleep(Duration::from_millis(120));
-            sys.refresh_processes(ProcessesToUpdate::All, true);
-        }
+        // CPU% seulement sur l'onglet Apps ; à l'activation on n'a besoin que de la RAM.
+        sys.refresh_processes(ProcessesToUpdate::All, with_cpu);
 
         let fg = foreground_pid();
         let self_pid = std::process::id();
@@ -418,12 +414,13 @@ fn list_processes_cached(cfg: &Config) -> Vec<ProcGroup> {
     let sig = keep_signature(&cfg.keep);
     if let Ok(guard) = PROC_CACHE.lock() {
         if let Some(c) = guard.as_ref() {
-            if c.keep_sig == sig && c.at.elapsed() < Duration::from_secs(3) {
+            // Cache plus long : la liste UI n'a pas besoin d'être temps réel.
+            if c.keep_sig == sig && c.at.elapsed() < Duration::from_secs(12) {
                 return c.groups.clone();
             }
         }
     }
-    let groups = scan(cfg, true);
+    let groups = scan(cfg, false);
     if let Ok(mut guard) = PROC_CACHE.lock() {
         *guard = Some(ProcCache {
             at: Instant::now(),
@@ -601,9 +598,8 @@ fn activate(app: AppHandle) -> Result<Session, String> {
     write_json(&app, "session.json", &session);
     overlay::sync_overlay(&app, &cfg.overlay, true);
     let _ = app.emit("overlay-config", &cfg.overlay);
-    if cfg.minimize_on_activate {
-        dock_to_taskbar(&app);
-    }
+    // Mode jeu : UI principale hors écran, sampler overlay seulement si besoin.
+    sleep_main_ui(&app);
     Ok(session)
 }
 
@@ -664,9 +660,11 @@ fn show_main(app: &AppHandle) {
     }
 }
 
-fn dock_to_taskbar(app: &AppHandle) {
+/// Endort le WebView principal pendant une session : moins de CPU/RAM pendant le jeu.
+fn sleep_main_ui(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.minimize();
+        let _ = w.hide();
     }
 }
 
