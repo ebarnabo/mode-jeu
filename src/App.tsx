@@ -15,9 +15,11 @@ import {
   CheckSquare,
   Square,
   Plus,
+  Package,
 } from "lucide-react";
 import { UpdateBar, UpdateProvider, UpdatesPanel } from "@/components/UpdateBar";
 import { PowerIgnition } from "@/components/PowerIgnition";
+import { SoftwarePanel } from "@/components/SoftwarePanel";
 import { MonitorPicker, type MonitorInfo } from "@/components/MonitorPicker";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -99,7 +101,7 @@ type SystemInfo = {
   tips: string[];
 };
 
-type Tab = "session" | "apps" | "jeux" | "overlay" | "options";
+type Tab = "session" | "apps" | "jeux" | "pc" | "overlay" | "options";
 type AppSort = "ram" | "cpu";
 type AppFilter = "all" | "closable" | "kept";
 
@@ -132,6 +134,7 @@ const TABS: { id: Tab; label: string; icon: typeof Zap }[] = [
   { id: "session", label: "Session", icon: Zap },
   { id: "apps", label: "Apps", icon: Shield },
   { id: "jeux", label: "Jeux", icon: Joystick },
+  { id: "pc", label: "PC", icon: Package },
   { id: "overlay", label: "Overlay", icon: Monitor },
   { id: "options", label: "Options", icon: Settings2 },
 ];
@@ -532,7 +535,7 @@ export default function App() {
               type="button"
               onClick={() => setTab(id)}
               className={cn(
-                "flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-[13px] font-semibold transition-colors",
+                "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-2 py-2.5 text-[12px] font-semibold transition-colors",
                 on
                   ? "bg-raised text-paper shadow-[inset_0_0_0_1px_rgba(214,166,74,0.28)]"
                   : "text-muted hover:text-paper"
@@ -595,6 +598,12 @@ export default function App() {
                     : "Surveillance off"
                 }
                 onClick={() => setTab("jeux")}
+              />
+              <SummaryChip
+                on
+                title="Logiciels"
+                detail="Installés · analyse"
+                onClick={() => setTab("pc")}
               />
             </div>
 
@@ -925,6 +934,8 @@ export default function App() {
             )}
           </section>
         )}
+
+        {tab === "pc" && <SoftwarePanel />}
 
         {tab === "overlay" && (
           <section className="animate-rise space-y-6">

@@ -1,6 +1,7 @@
 mod games;
 mod metrics;
 mod overlay;
+mod software;
 mod tweaks;
 #[cfg(windows)]
 mod amd_adl;
@@ -296,6 +297,10 @@ fn store_config(app: &AppHandle, config: &Config) {
     }
 }
 
+pub(crate) fn is_critical_name(name: &str) -> bool {
+    is_critical(name)
+}
+
 fn is_critical(name: &str) -> bool {
     CRITICAL.contains(&name.to_lowercase().as_str())
 }
@@ -543,6 +548,21 @@ fn list_games(app: AppHandle) -> Vec<games::GameEntry> {
         sys.refresh_processes(ProcessesToUpdate::All, false);
         games::list_games(sys, &cfg.extra_games)
     })
+}
+
+#[tauri::command]
+fn list_installed() -> Vec<software::InstalledApp> {
+    software::list_installed()
+}
+
+#[tauri::command]
+fn uninstall_app(id: String) -> Result<(), String> {
+    software::uninstall(&id)
+}
+
+#[tauri::command]
+fn analyze_open_apps(app: AppHandle) -> software::AnalyzeReport {
+    software::analyze(&scan(&load_config(&app), false))
 }
 
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
@@ -880,6 +900,9 @@ pub fn run_app() {
             toggle_overlay_visibility,
             get_system_info,
             list_games,
+            list_installed,
+            uninstall_app,
+            analyze_open_apps,
             activate,
             restore
         ])
