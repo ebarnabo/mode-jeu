@@ -139,6 +139,18 @@
   .scroll-area::-webkit-scrollbar-thumb { background: #272B34; border-radius: 8px; }
 }
 
+.overlay-notch {
+  transform-origin: top center;
+  transition: transform 160ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .overlay-notch:hover {
+    transform: scale(1.04);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  .overlay-notch:hover { transform: none; }
 }

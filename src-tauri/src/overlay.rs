@@ -2,7 +2,7 @@ use crate::metrics::{self, Metrics, MonitorRect};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 fn default_true() -> bool {
     true
@@ -38,6 +38,9 @@ pub struct OverlayConfig {
     pub show_fps: bool,
     #[serde(default = "default_true")]
     pub show_ram: bool,
+    /// Capsule en haut d’écran pendant le mode jeu (raccourcis + métriques).
+    #[serde(default = "default_true")]
+    pub notch: bool,
     #[serde(default = "default_opacity")]
     pub opacity: u8,
     #[serde(default = "default_position")]
@@ -61,12 +64,36 @@ impl Default for OverlayConfig {
             show_temps: true,
             show_fps: true,
             show_ram: true,
+            notch: true,
             opacity: 88,
             position: "top-right".into(),
             interval_ms: 2000,
             hidden: false,
         }
     }
+}
+
+/// Config overlay + état session (non persisté).
+#[derive(Serialize, Clone)]
+pub struct OverlayPayload {
+    #[serde(flatten)]
+    pub config: OverlayConfig,
+    pub session_active: bool,
+}
+
+pub fn payload(cfg: &OverlayConfig, session_active: bool) -> OverlayPayload {
+    OverlayPayload {
+        config: cfg.clone(),
+        session_active,
+    }
+}
+
+pub fn emit_config(app: &AppHandle, cfg: &OverlayConfig, session_active: bool) {
+    let _ = app.emit("overlay-config", payload(cfg, session_active));
+}
+
+fn notch_active(cfg: &OverlayConfig, game_active: bool) -> bool {
+    cfg.notch && game_active
 }
 
 #[derive(Serialize, Clone)]
@@ -168,11 +195,12 @@ pub fn sync_overlay(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) {
         metrics::set_sampling(false);
         return;
     }
-    if let Err(e) = place_overlay(app, &win, cfg) {
+    if let Err(e) = place_overlay(app, &win, cfg, game_active) {
         eprintln!("overlay place: {e}");
     }
     let _ = win.set_skip_taskbar(true);
-    let _ = win.set_ignore_cursor_events(true);
+    // La notch doit recevoir le survol et les clics ; le panneau coin reste transparent.
+    let _ = win.set_ignore_cursor_events(!notch_active(cfg, game_active));
     let _ = win.set_always_on_top(true);
     let _ = win.show();
     metrics::set_sampling(true);
@@ -187,10 +215,30 @@ fn pick_monitor<'a>(monitors: &'a [MonitorInfo], name: Option<&str>) -> Option<&
     monitors.iter().find(|m| !m.is_primary).or(monitors.first())
 }
 
-fn place_overlay(app: &AppHandle, win: &WebviewWindow, cfg: &OverlayConfig) -> Result<(), String> {
+fn place_overlay(
+    app: &AppHandle,
+    win: &WebviewWindow,
+    cfg: &OverlayConfig,
+    game_active: bool,
+) -> Result<(), String> {
     let monitors = list_monitors(app)?;
     let mon = pick_monitor(&monitors, cfg.monitor_name.as_deref())
         .ok_or_else(|| "aucun moniteur".to_string())?;
+
+    let scale = mon.scale.max(1.0);
+
+    if notch_active(cfg, game_active) {
+        // Marge autour de la capsule pour le scale au survol (origine haut-centre).
+        let width = (640.0 * scale).round() as u32;
+        let height = (92.0 * scale).round() as u32;
+        let x = mon.x + (mon.width as i32 - width as i32) / 2;
+        let y = mon.y;
+        win.set_size(PhysicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+        win.set_position(PhysicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
 
     let mut lines = 0u32;
     if cfg.show_fps {
@@ -210,7 +258,6 @@ fn place_overlay(app: &AppHandle, win: &WebviewWindow, cfg: &OverlayConfig) -> R
     }
     let lines = lines.max(1);
 
-    // Overlay plus large : valeurs lisibles + temps séparés.
     let width = 300u32;
     let height = 44 + lines * 36 + 16;
     let margin = 18i32;

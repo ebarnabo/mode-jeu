@@ -14,7 +14,11 @@ const NO_WINDOW: u32 = 0x0800_0000;
 pub struct Metrics {
     pub cpu_pct: f32,
     pub ram_pct: f32,
+    pub ram_used_gb: f32,
+    pub ram_total_gb: f32,
     pub gpu_pct: Option<f32>,
+    pub gpu_used_gb: Option<f32>,
+    pub gpu_total_gb: Option<f32>,
     pub cpu_temp_c: Option<f32>,
     pub gpu_temp_c: Option<f32>,
     pub fps: Option<f32>,
@@ -36,6 +40,8 @@ struct Sampler {
     last_temp: Instant,
     last_fps: Instant,
     gpu_pct: Option<f32>,
+    gpu_used_gb: Option<f32>,
+    gpu_total_gb: Option<f32>,
     gpu_temp: Option<f32>,
     cpu_temp: Option<f32>,
     fps: Option<f32>,
@@ -61,6 +67,8 @@ impl Sampler {
             last_temp: Instant::now() - Duration::from_secs(10),
             last_fps: Instant::now() - Duration::from_secs(5),
             gpu_pct: None,
+            gpu_used_gb: None,
+            gpu_total_gb: None,
             gpu_temp: None,
             cpu_temp: None,
             fps: None,
@@ -75,7 +83,11 @@ impl Sampler {
 static LATEST: Mutex<Metrics> = Mutex::new(Metrics {
     cpu_pct: 0.0,
     ram_pct: 0.0,
+    ram_used_gb: 0.0,
+    ram_total_gb: 0.0,
     gpu_pct: None,
+    gpu_used_gb: None,
+    gpu_total_gb: None,
     cpu_temp_c: None,
     gpu_temp_c: None,
     fps: None,
@@ -147,9 +159,11 @@ fn tick(s: &mut Sampler) {
     }
 
     if now.duration_since(s.last_gpu) >= Duration::from_secs(4) {
-        let (util, temp) = query_gpu(s);
-        s.gpu_pct = util;
-        s.gpu_temp = temp;
+        let sample = query_gpu(s);
+        s.gpu_pct = sample.util;
+        s.gpu_temp = sample.temp;
+        s.gpu_used_gb = sample.used_gb;
+        s.gpu_total_gb = sample.total_gb;
         s.last_gpu = now;
     }
 
@@ -165,8 +179,10 @@ fn tick(s: &mut Sampler) {
     }
 
     let cpu_pct = s.sys.global_cpu_usage();
-    let ram_pct = if s.sys.total_memory() > 0 {
-        (s.sys.used_memory() as f32 / s.sys.total_memory() as f32) * 100.0
+    let ram_used = s.sys.used_memory() as f32 / 1_073_741_824.0;
+    let ram_total = s.sys.total_memory() as f32 / 1_073_741_824.0;
+    let ram_pct = if ram_total > 0.0 {
+        (ram_used / ram_total) * 100.0
     } else {
         0.0
     };
@@ -175,7 +191,11 @@ fn tick(s: &mut Sampler) {
         *latest = Metrics {
             cpu_pct,
             ram_pct,
+            ram_used_gb: ram_used,
+            ram_total_gb: ram_total,
             gpu_pct: s.gpu_pct,
+            gpu_used_gb: s.gpu_used_gb,
+            gpu_total_gb: s.gpu_total_gb,
             cpu_temp_c: s.cpu_temp,
             gpu_temp_c: s.gpu_temp,
             fps: s.fps,
@@ -204,11 +224,27 @@ fn cpu_temp_from_components(components: &Components) -> Option<f32> {
     best
 }
 
-fn query_gpu(s: &mut Sampler) -> (Option<f32>, Option<f32>) {
+struct GpuSample {
+    util: Option<f32>,
+    temp: Option<f32>,
+    used_gb: Option<f32>,
+    total_gb: Option<f32>,
+}
+
+fn gpu_util_temp(util: Option<f32>, temp: Option<f32>) -> GpuSample {
+    GpuSample {
+        util,
+        temp,
+        used_gb: None,
+        total_gb: None,
+    }
+}
+
+fn query_gpu(s: &mut Sampler) -> GpuSample {
     match s.gpu_kind {
         GpuKind::Nvidia => {
             let r = query_gpu_nvidia();
-            if r.0.is_none() && r.1.is_none() {
+            if r.util.is_none() && r.temp.is_none() {
                 s.nvidia_misses = s.nvidia_misses.saturating_add(1);
                 if s.nvidia_misses >= 3 {
                     s.gpu_kind = detect_gpu_fallback();
@@ -221,34 +257,35 @@ fn query_gpu(s: &mut Sampler) -> (Option<f32>, Option<f32>) {
         GpuKind::Amd => {
             #[cfg(windows)]
             {
-                return crate::amd_adl::query_amd_gpu();
+                let (u, t) = crate::amd_adl::query_amd_gpu();
+                return gpu_util_temp(u, t);
             }
             #[cfg(not(windows))]
             {
-                return (None, None);
+                return gpu_util_temp(None, None);
             }
         }
-        GpuKind::None => return (None, None),
+        GpuKind::None => return gpu_util_temp(None, None),
         GpuKind::Unknown => {}
     }
 
-    // Détection unique (ordre : AMD DLL → nvidia-smi une fois).
     #[cfg(windows)]
     {
         if crate::amd_adl::available() {
             s.gpu_kind = GpuKind::Amd;
-            return crate::amd_adl::query_amd_gpu();
+            let (u, t) = crate::amd_adl::query_amd_gpu();
+            return gpu_util_temp(u, t);
         }
     }
 
     let nvidia = query_gpu_nvidia();
-    if nvidia.0.is_some() || nvidia.1.is_some() {
+    if nvidia.util.is_some() || nvidia.temp.is_some() {
         s.gpu_kind = GpuKind::Nvidia;
         return nvidia;
     }
 
     s.gpu_kind = GpuKind::None;
-    (None, None)
+    gpu_util_temp(None, None)
 }
 
 fn detect_gpu_fallback() -> GpuKind {
@@ -261,11 +298,11 @@ fn detect_gpu_fallback() -> GpuKind {
     GpuKind::None
 }
 
-fn query_gpu_nvidia() -> (Option<f32>, Option<f32>) {
+fn query_gpu_nvidia() -> GpuSample {
     let out = run_hidden(
         "nvidia-smi",
         &[
-            "--query-gpu=utilization.gpu,temperature.gpu",
+            "--query-gpu=utilization.gpu,temperature.gpu,memory.used,memory.total",
             "--format=csv,noheader,nounits",
         ],
     );
@@ -273,11 +310,22 @@ fn query_gpu_nvidia() -> (Option<f32>, Option<f32>) {
         if let Some(line) = text.lines().next() {
             let parts: Vec<_> = line.split(',').map(|s| s.trim()).collect();
             if parts.len() >= 2 {
-                return (parts[0].parse().ok(), parts[1].parse().ok());
+                let mib = |i: usize| {
+                    parts
+                        .get(i)
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .map(|v| v / 1024.0)
+                };
+                return GpuSample {
+                    util: parts[0].parse().ok(),
+                    temp: parts[1].parse().ok(),
+                    used_gb: mib(2),
+                    total_gb: mib(3),
+                };
             }
         }
     }
-    (None, None)
+    gpu_util_temp(None, None)
 }
 
 fn run_hidden(cmd: &str, args: &[&str]) -> Option<String> {

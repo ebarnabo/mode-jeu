@@ -18,7 +18,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
-use overlay::OverlayConfig;
+use overlay::{OverlayConfig, OverlayPayload};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -493,7 +493,7 @@ fn sync_from_config(app: &AppHandle, cfg: &Config) {
     apply_startup(cfg.start_with_windows);
     let session = sanitize_session(app);
     overlay::sync_overlay(app, &cfg.overlay, session.active);
-    let _ = app.emit("overlay-config", &cfg.overlay);
+    overlay::emit_config(app, &cfg.overlay, session.active);
 }
 
 #[tauri::command]
@@ -537,8 +537,10 @@ fn get_metrics(app: AppHandle) -> metrics::Metrics {
 }
 
 #[tauri::command]
-fn get_overlay_config(app: AppHandle) -> OverlayConfig {
-    load_config(&app).overlay
+fn get_overlay_config(app: AppHandle) -> OverlayPayload {
+    let cfg = load_config(&app);
+    let session = sanitize_session(&app);
+    overlay::payload(&cfg.overlay, session.active)
 }
 
 #[tauri::command]
@@ -668,7 +670,7 @@ fn activate(app: AppHandle) -> Result<Session, String> {
 
     write_json(&app, "session.json", &session);
     overlay::sync_overlay(&app, &cfg.overlay, true);
-    let _ = app.emit("overlay-config", &cfg.overlay);
+    overlay::emit_config(&app, &cfg.overlay, true);
     let _ = app.emit("session-changed", &session);
     // Mode jeu : UI principale hors écran, sampler overlay seulement si besoin.
     sleep_main_ui(&app);
@@ -680,7 +682,7 @@ fn restore(app: AppHandle) -> Result<Session, String> {
     let empty = restore_session(&app);
     let cfg = load_config(&app);
     overlay::sync_overlay(&app, &cfg.overlay, false);
-    let _ = app.emit("overlay-config", &cfg.overlay);
+    overlay::emit_config(&app, &cfg.overlay, false);
     let _ = app.emit("session-changed", &empty);
     show_main(&app);
     Ok(empty)
@@ -731,6 +733,11 @@ fn show_main(app: &AppHandle) {
         let _ = w.show();
         let _ = w.set_focus();
     }
+}
+
+#[tauri::command]
+fn open_main(app: AppHandle) {
+    show_main(&app);
 }
 
 /// Endort le WebView principal pendant une session : moins de CPU/RAM pendant le jeu.
@@ -930,6 +937,7 @@ pub fn run_app() {
             get_metrics,
             get_overlay_config,
             toggle_overlay_visibility,
+            open_main,
             get_system_info,
             list_games,
             list_installed,

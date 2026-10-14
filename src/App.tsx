@@ -48,6 +48,7 @@ type OverlayConfig = {
   show_temps: boolean;
   show_fps: boolean;
   show_ram: boolean;
+  notch: boolean;
   opacity: number;
   position: string;
   interval_ms: number;
@@ -884,6 +885,13 @@ export default function App() {
                 checked={config.overlay.always}
                 onChange={(v) => patchOverlay({ always: v })}
               />
+              <Divider />
+              <Setting
+                label="Notch en mode jeu"
+                hint="Capsule en haut de l’écran d’overlay : RAM / CPU / GPU used/total et raccourcis."
+                checked={config.overlay.notch !== false}
+                onChange={(v) => patchOverlay({ notch: v })}
+              />
             </div>
 
             <div className="rounded-2xl border border-line bg-surface/60 p-5">
@@ -934,7 +942,9 @@ export default function App() {
 
             <div className="grid gap-5 sm:grid-cols-2">
               <div className="rounded-2xl border border-line bg-surface/60 p-5">
-                <p className="mb-3 text-[13px] font-semibold text-paper">Coin</p>
+                <p className="mb-3 text-[13px] font-semibold text-paper">
+                  Coin {config.overlay.notch !== false ? "(hors notch)" : ""}
+                </p>
                 <div className="grid grid-cols-2 gap-2">
                   {(
                     [
