@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Loader2, Search, Sparkles, Trash2, Lock, Package } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DisksPanel } from "@/components/DisksPanel";
 import { cn } from "@/lib/utils";
 
 type InstalledApp = {
@@ -36,13 +37,13 @@ type AnalyzeReport = {
   locked: AdviceItem[];
 };
 
-type View = "installed" | "open";
+type View = "disks" | "installed" | "open";
 
 export function SoftwarePanel() {
-  const [view, setView] = useState<View>("installed");
+  const [view, setView] = useState<View>("disks");
   const [apps, setApps] = useState<InstalledApp[]>([]);
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [report, setReport] = useState<AnalyzeReport | null>(null);
   const [pending, setPending] = useState<InstalledApp | AdviceItem | null>(null);
@@ -62,8 +63,8 @@ export function SoftwarePanel() {
   }, []);
 
   useEffect(() => {
-    void refreshInstalled();
-  }, [refreshInstalled]);
+    if (view === "installed") void refreshInstalled();
+  }, [view, refreshInstalled]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -111,8 +112,7 @@ export function SoftwarePanel() {
         <div>
           <h2 className="font-display text-lg font-semibold text-paper">Logiciels</h2>
           <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
-            Inventaire Windows, désinstall via le désinstalleur officiel. L’analyse classe
-            les apps ouvertes : utile, à retirer, à garder, intouchable.
+            Disques (SMART réel), logiciels installés, analyse des process ouverts.
           </p>
         </div>
         <span className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] font-semibold text-muted">
@@ -146,6 +146,7 @@ export function SoftwarePanel() {
       <div className="flex gap-1 rounded-2xl border border-line bg-surface/70 p-1">
         {(
           [
+            ["disks", "Disques"],
             ["installed", "Installées"],
             ["open", "Ouvertes"],
           ] as const
@@ -171,6 +172,8 @@ export function SoftwarePanel() {
           {error}
         </p>
       )}
+
+      {view === "disks" && <DisksPanel />}
 
       {view === "installed" && (
         <>

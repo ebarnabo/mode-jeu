@@ -1,3 +1,4 @@
+mod disks;
 mod games;
 mod metrics;
 mod overlay;
@@ -565,6 +566,26 @@ fn analyze_open_apps(app: AppHandle) -> software::AnalyzeReport {
     software::analyze(&scan(&load_config(&app), false))
 }
 
+#[tauri::command]
+fn list_disks() -> Vec<disks::PhysicalDisk> {
+    disks::list_disks()
+}
+
+#[tauri::command]
+fn optimize_volume(letter: String) -> Result<disks::DiskJob, String> {
+    disks::optimize_volume(&letter)
+}
+
+#[tauri::command]
+fn analyze_fragmentation(letter: String) -> Result<disks::DiskJob, String> {
+    disks::analyze_fragmentation(&letter)
+}
+
+#[tauri::command]
+fn improve_volume(letter: String) -> Result<disks::DiskJob, String> {
+    disks::improve_volume(&letter)
+}
+
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
     let mut c = Command::new(cmd);
     c.args(args);
@@ -903,6 +924,10 @@ pub fn run_app() {
             list_installed,
             uninstall_app,
             analyze_open_apps,
+            list_disks,
+            optimize_volume,
+            analyze_fragmentation,
+            improve_volume,
             activate,
             restore
         ])
