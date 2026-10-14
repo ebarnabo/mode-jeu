@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   Gamepad2,
+  Joystick,
   Lock,
   Search,
   RotateCcw,
@@ -12,6 +14,7 @@ import {
   Zap,
   CheckSquare,
   Square,
+  Plus,
 } from "lucide-react";
 import { UpdateBar, UpdateProvider, UpdatesPanel } from "@/components/UpdateBar";
 import { PowerIgnition } from "@/components/PowerIgnition";
@@ -68,7 +71,25 @@ type Config = {
   mmcss_gaming: boolean;
   min_close_mb: number;
   reopen_closed_apps: boolean;
+  watch_games: boolean;
+  auto_game_exes: string[];
+  extra_games: { exe: string; name: string }[];
   overlay: OverlayConfig;
+};
+
+type GameEntry = {
+  id: string;
+  name: string;
+  exe: string;
+  source: string;
+  path: string | null;
+  running: boolean;
+};
+
+type GameDetected = {
+  name: string;
+  exe: string;
+  source: string;
 };
 
 type SystemInfo = {
@@ -78,7 +99,7 @@ type SystemInfo = {
   tips: string[];
 };
 
-type Tab = "session" | "apps" | "overlay" | "options";
+type Tab = "session" | "apps" | "jeux" | "overlay" | "options";
 type AppSort = "ram" | "cpu";
 type AppFilter = "all" | "closable" | "kept";
 
@@ -110,6 +131,7 @@ const KEEP_PRESETS: { id: string; label: string; keys: string[] }[] = [
 const TABS: { id: Tab; label: string; icon: typeof Zap }[] = [
   { id: "session", label: "Session", icon: Zap },
   { id: "apps", label: "Apps", icon: Shield },
+  { id: "jeux", label: "Jeux", icon: Joystick },
   { id: "overlay", label: "Overlay", icon: Monitor },
   { id: "options", label: "Options", icon: Settings2 },
 ];
@@ -138,6 +160,9 @@ export default function App() {
     freedMb: number;
     appsClosed: number;
   } | null>(null);
+  const [games, setGames] = useState<GameEntry[]>([]);
+  const [gameQuery, setGameQuery] = useState("");
+  const [prompt, setPrompt] = useState<GameDetected | null>(null);
 
   const refresh = useCallback(async () => {
     const [c, s, p, m, info] = await Promise.all([
@@ -158,11 +183,40 @@ export default function App() {
     refresh();
   }, [refresh]);
 
-  // Liste process uniquement quand l'onglet Apps est ouvert — zéro polling ailleurs.
+  // Liste process uniquement quand Apps / Jeux est ouvert — zéro polling ailleurs.
   useEffect(() => {
-    if (busy || tab !== "apps") return;
+    if (busy || (tab !== "apps" && tab !== "jeux")) return;
     invoke<ProcGroup[]>("list_processes").then(setProcs).catch(() => {});
   }, [tab, busy]);
+
+  useEffect(() => {
+    if (tab !== "jeux") return;
+    invoke<GameEntry[]>("list_games").then(setGames).catch(() => {});
+  }, [tab]);
+
+  useEffect(() => {
+    let stop = false;
+    const unsubs: Array<() => void> = [];
+    listen<GameDetected>("game-detected", (e) => {
+      if (!stop) setPrompt(e.payload);
+    }).then((u) => {
+      if (stop) u();
+      else unsubs.push(u);
+    });
+    listen<Session>("session-changed", (e) => {
+      if (!stop) {
+        setSession(e.payload);
+        if (e.payload.active) setPrompt(null);
+      }
+    }).then((u) => {
+      if (stop) u();
+      else unsubs.push(u);
+    });
+    return () => {
+      stop = true;
+      unsubs.forEach((u) => u());
+    };
+  }, []);
 
   const patch = async (next: Partial<Config>) => {
     if (!config) return;
@@ -174,6 +228,45 @@ export default function App() {
   const patchOverlay = (next: Partial<OverlayConfig>) => {
     if (!config) return;
     patch({ overlay: { ...config.overlay, ...next } });
+  };
+
+  const isAutoGame = (exe: string) =>
+    (config?.auto_game_exes ?? []).includes(exe.toLowerCase());
+
+  const setGameAuto = (exe: string, name: string, auto: boolean) => {
+    if (!config) return;
+    const key = exe.toLowerCase();
+    const auto_game_exes = auto
+      ? Array.from(new Set([...(config.auto_game_exes ?? []), key]))
+      : (config.auto_game_exes ?? []).filter((e) => e !== key);
+    const extra = config.extra_games ?? [];
+    const extra_games = extra.some((g) => g.exe === key)
+      ? extra
+      : [...extra, { exe: key, name }];
+    void patch({ auto_game_exes, extra_games });
+  };
+
+  const addOpenGame = (p: ProcGroup) => {
+    if (!config) return;
+    const key = p.key.toLowerCase();
+    const extra = config.extra_games ?? [];
+    if (extra.some((g) => g.exe === key)) return;
+    const extra_games = [...extra, { exe: key, name: p.name }];
+    void patch({ extra_games });
+    setGames((prev) => {
+      if (prev.some((g) => g.exe === key)) return prev;
+      return [
+        {
+          id: `user:${key}`,
+          name: p.name,
+          exe: key,
+          source: "Choisi",
+          path: p.path,
+          running: true,
+        },
+        ...prev,
+      ];
+    });
   };
 
   const persistKeep = async (keep: string[]) => {
@@ -272,6 +365,32 @@ export default function App() {
     return { closable: list.length, reclaimable: list.reduce((n, p) => n + p.memory_mb, 0) };
   }, [procs, config]);
 
+  const visibleGames = useMemo(() => {
+    const q = gameQuery.trim().toLowerCase();
+    return games.filter(
+      (g) =>
+        !q ||
+        g.name.toLowerCase().includes(q) ||
+        g.exe.toLowerCase().includes(q) ||
+        g.source.toLowerCase().includes(q)
+    );
+  }, [games, gameQuery]);
+
+  const openCandidates = useMemo(() => {
+    const known = new Set(games.map((g) => g.exe));
+    return procs
+      .filter(
+        (p) =>
+          !p.protected &&
+          !known.has(p.key) &&
+          p.memory_mb >= 40 &&
+          !p.key.includes("steam") &&
+          !p.key.includes("epic") &&
+          p.key !== "explorer.exe"
+      )
+      .slice(0, 12);
+  }, [procs, games]);
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     const minMb = config?.min_close_mb ?? 40;
@@ -322,6 +441,56 @@ export default function App() {
         appsClosed={ignition?.appsClosed ?? 0}
         onDone={clearIgnition}
       />
+      {prompt && !active && (
+        <div className="absolute inset-0 z-50 flex items-end justify-center bg-ink/70 p-6 backdrop-blur-sm sm:items-center">
+          <div className="w-full max-w-[420px] overflow-hidden rounded-[28px] border border-brass/30 bg-gradient-to-br from-raised via-surface to-ink p-6 shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-brass/80">
+              {prompt.source} · jeu détecté
+            </p>
+            <h2 className="mt-3 font-display text-[32px] font-semibold leading-[0.95] tracking-tight text-paper">
+              {prompt.name}
+            </h2>
+            <p className="mt-3 text-[13px] leading-relaxed text-muted">
+              Activer le mode jeu maintenant ? Les apps inutiles se ferment, la session se prépare.
+            </p>
+            <p className="mt-2 font-mono text-[11px] text-muted/80">{prompt.exe}</p>
+            <div className="mt-6 flex flex-col gap-2">
+              <Button
+                size="lg"
+                className="w-full"
+                disabled={busy}
+                onClick={() => {
+                  setPrompt(null);
+                  void run("activate");
+                }}
+              >
+                <Gamepad2 className="h-5 w-5" />
+                Activer
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                className="w-full"
+                disabled={busy}
+                onClick={() => {
+                  setGameAuto(prompt.exe, prompt.name, true);
+                  setPrompt(null);
+                  void run("activate");
+                }}
+              >
+                Toujours auto pour ce jeu
+              </Button>
+              <button
+                type="button"
+                className="py-2 text-[13px] font-semibold text-muted hover:text-paper"
+                onClick={() => setPrompt(null)}
+              >
+                Pas maintenant
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <header
         data-tauri-drag-region
         className="relative z-10 flex items-start justify-between gap-4 px-7 pb-4 pt-7"
@@ -395,7 +564,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <SummaryChip
                 on={config.high_performance}
                 title="Perf. élevées"
@@ -412,6 +581,20 @@ export default function App() {
                 title={`${config.keep.length} gardées`}
                 detail="Apps protégées"
                 onClick={() => setTab("apps")}
+              />
+              <SummaryChip
+                on={config.watch_games !== false}
+                title={
+                  (config.auto_game_exes ?? []).length > 0
+                    ? `${config.auto_game_exes.length} auto`
+                    : "Détection jeux"
+                }
+                detail={
+                  config.watch_games !== false
+                    ? "Demande ou auto au lancement"
+                    : "Surveillance off"
+                }
+                onClick={() => setTab("jeux")}
               />
             </div>
 
@@ -637,6 +820,109 @@ export default function App() {
                 })
               )}
             </div>
+          </section>
+        )}
+
+        {tab === "jeux" && (
+          <section className="animate-rise space-y-5">
+            <div className="flex items-end justify-between gap-4">
+              <div>
+                <h2 className="font-display text-lg font-semibold text-paper">Jeux</h2>
+                <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
+                  Steam, Epic, et les process ouverts. Auto = mode jeu sans demander. Les autres
+                  jeux détectés proposent d’activer.
+                </p>
+              </div>
+              <span className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] font-semibold text-muted">
+                {(config.auto_game_exes ?? []).length} auto
+              </span>
+            </div>
+
+            <div className="rounded-2xl border border-line bg-surface/60 px-5 py-4">
+              <Setting
+                label="Détecter les lancements"
+                hint="Demande d’activer quand un jeu connu s’ouvre. Zéro scan pendant une session."
+                checked={config.watch_games !== false}
+                onChange={(v) => patch({ watch_games: v })}
+              />
+            </div>
+
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+              <Input
+                value={gameQuery}
+                onChange={(e) => setGameQuery(e.target.value)}
+                placeholder="Filtrer un jeu"
+                className="pl-11"
+              />
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border border-line bg-surface/60">
+              {visibleGames.length === 0 ? (
+                <p className="px-4 py-10 text-center text-[13px] text-muted">
+                  Aucun jeu trouvé. Lance Steam ou ajoute un process ouvert ci-dessous.
+                </p>
+              ) : (
+                visibleGames.map((g, i) => {
+                  const auto = isAutoGame(g.exe);
+                  return (
+                    <div
+                      key={g.id}
+                      className={cn(
+                        "flex items-center gap-3 px-4 py-3.5",
+                        i > 0 && "border-t border-line/80",
+                        g.running && "bg-jade/[0.04]"
+                      )}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate text-sm font-medium text-paper">{g.name}</span>
+                          {g.running && (
+                            <span className="rounded-md bg-jade/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-jade">
+                              Ouvert
+                            </span>
+                          )}
+                          <span className="rounded-md bg-raised px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                            {g.source}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 font-mono text-[11px] text-muted">{g.exe}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="text-[11px] font-semibold text-muted">Auto</span>
+                        <Switch
+                          checked={auto}
+                          onCheckedChange={(v) => setGameAuto(g.exe, g.name, v)}
+                          aria-label={`Mode jeu auto pour ${g.name}`}
+                        />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {openCandidates.length > 0 && (
+              <div>
+                <h3 className="mb-2 text-[13px] font-semibold text-paper">Processus ouverts</h3>
+                <p className="mb-3 text-[12px] text-muted">
+                  Pas dans Steam / Epic ? Ajoute-le pour le détecter au prochain lancement.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {openCandidates.map((p) => (
+                    <button
+                      key={p.key}
+                      type="button"
+                      onClick={() => addOpenGame(p)}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface/80 px-3 py-1.5 text-[12px] font-semibold text-muted transition-colors hover:border-brass/40 hover:text-paper"
+                    >
+                      <Plus className="h-3 w-3 text-brass" />
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
         )}
 

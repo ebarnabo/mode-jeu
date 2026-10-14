@@ -1,3 +1,4 @@
+mod games;
 mod metrics;
 mod overlay;
 mod tweaks;
@@ -125,6 +126,15 @@ pub struct Config {
     /// Si false, les apps fermées ne sont pas relancées à la sortie du mode jeu.
     #[serde(default = "default_true")]
     pub reopen_closed_apps: bool,
+    /// Surveille les lancements de jeux (Steam / Epic / choisis).
+    #[serde(default = "default_true")]
+    pub watch_games: bool,
+    /// Exe en auto-activation (sans demander).
+    #[serde(default)]
+    pub auto_game_exes: Vec<String>,
+    /// Jeux ajoutés manuellement depuis les process ouverts.
+    #[serde(default)]
+    pub extra_games: Vec<games::ExtraGame>,
     #[serde(default)]
     pub overlay: OverlayConfig,
 }
@@ -166,6 +176,9 @@ impl Default for Config {
             mmcss_gaming: false,
             min_close_mb: default_min_close_mb(),
             reopen_closed_apps: true,
+            watch_games: true,
+            auto_game_exes: Vec::new(),
+            extra_games: Vec::new(),
             overlay: OverlayConfig::default(),
         }
     }
@@ -523,6 +536,15 @@ fn toggle_overlay_visibility(app: AppHandle) -> OverlayConfig {
     cfg.overlay
 }
 
+#[tauri::command]
+fn list_games(app: AppHandle) -> Vec<games::GameEntry> {
+    let cfg = load_config(&app);
+    with_proc_sys(|sys| {
+        sys.refresh_processes(ProcessesToUpdate::All, false);
+        games::list_games(sys, &cfg.extra_games)
+    })
+}
+
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
     let mut c = Command::new(cmd);
     c.args(args);
@@ -598,6 +620,7 @@ fn activate(app: AppHandle) -> Result<Session, String> {
     write_json(&app, "session.json", &session);
     overlay::sync_overlay(&app, &cfg.overlay, true);
     let _ = app.emit("overlay-config", &cfg.overlay);
+    let _ = app.emit("session-changed", &session);
     // Mode jeu : UI principale hors écran, sampler overlay seulement si besoin.
     sleep_main_ui(&app);
     Ok(session)
@@ -609,6 +632,7 @@ fn restore(app: AppHandle) -> Result<Session, String> {
     let cfg = load_config(&app);
     overlay::sync_overlay(&app, &cfg.overlay, false);
     let _ = app.emit("overlay-config", &cfg.overlay);
+    let _ = app.emit("session-changed", &empty);
     show_main(&app);
     Ok(empty)
 }
@@ -831,6 +855,7 @@ pub fn run_app() {
             let _ = sanitize_session(app.handle());
             let cfg = load_config(app.handle());
             sync_from_config(app.handle(), &cfg);
+            games::start_watcher(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -854,6 +879,7 @@ pub fn run_app() {
             get_overlay_config,
             toggle_overlay_visibility,
             get_system_info,
+            list_games,
             activate,
             restore
         ])
