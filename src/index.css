@@ -148,10 +148,14 @@
 .overlay-notch--bottom { transform-origin: bottom center; }
 .overlay-notch--bottom-left { transform-origin: bottom left; }
 .overlay-notch--bottom-right { transform-origin: bottom right; }
+.overlay-notch--roomy { transform: none; }
 
 @media (hover: hover) and (pointer: fine) {
   .overlay-notch:hover {
     transform: scale(1.04);
+  }
+  .overlay-notch--roomy:hover {
+    transform: none;
   }
 }
 

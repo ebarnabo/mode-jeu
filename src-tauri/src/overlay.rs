@@ -284,8 +284,9 @@ fn place_overlay(
         let mon = pick_notch_monitor(&monitors, cfg.notch_monitor_name.as_deref())
             .ok_or_else(|| "aucun moniteur".to_string())?;
         let scale = mon.scale.max(1.0);
-        let width = (360.0 * scale).round() as u32;
-        let height = (56.0 * scale).round() as u32;
+        let extra = crate::shelf::expanded();
+        let width = ((if extra { 560.0 } else { 480.0 }) * scale).round() as u32;
+        let height = ((if extra { 104.0 } else { 56.0 }) * scale).round() as u32;
         let inset = (20.0 * scale).round() as i32;
         let pos = cfg.notch_position.as_str();
         let x = match pos {

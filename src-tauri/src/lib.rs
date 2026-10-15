@@ -1,7 +1,9 @@
 mod disks;
 mod games;
+mod media;
 mod metrics;
 mod overlay;
+mod shelf;
 mod software;
 mod tweaks;
 #[cfg(windows)]
@@ -16,7 +18,7 @@ use std::time::{Duration, Instant};
 use sysinfo::{ProcessesToUpdate, System};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri::{AppHandle, DragDropEvent, Emitter, Manager, WindowEvent};
 
 use overlay::{OverlayConfig, OverlayPayload};
 
@@ -756,6 +758,82 @@ fn hide_notch(app: AppHandle) {
     refresh_overlay(&app);
 }
 
+#[tauri::command]
+fn get_media() -> media::MediaNow {
+    media::now()
+}
+
+#[tauri::command]
+fn media_toggle() -> media::MediaNow {
+    media::toggle()
+}
+
+#[tauri::command]
+fn shelf_list() -> Vec<shelf::ShelfItem> {
+    shelf::list()
+}
+
+#[tauri::command]
+fn shelf_add(app: AppHandle, paths: Vec<String>) -> Vec<shelf::ShelfItem> {
+    let items = shelf::add_paths(paths.into_iter().map(PathBuf::from).collect());
+    shelf::set_drag_hover(false);
+    shelf::emit(&app);
+    refresh_overlay(&app);
+    items
+}
+
+#[tauri::command]
+fn shelf_remove(app: AppHandle, id: u64) -> Vec<shelf::ShelfItem> {
+    let items = shelf::remove(id);
+    shelf::emit(&app);
+    refresh_overlay(&app);
+    items
+}
+
+#[tauri::command]
+fn shelf_clear(app: AppHandle) -> Vec<shelf::ShelfItem> {
+    let items = shelf::clear();
+    shelf::emit(&app);
+    refresh_overlay(&app);
+    items
+}
+
+#[tauri::command]
+fn shelf_drag(app: AppHandle, id: u64) -> Result<(), String> {
+    shelf::begin_drag(&app, id)
+}
+
+fn handle_overlay_drop(app: &AppHandle, ev: &DragDropEvent) {
+    let cfg = load_config(app);
+    let active = read_json::<Session>(app, "session.json").active;
+    if !overlay::should_show_notch(app, &cfg.overlay, active) {
+        return;
+    }
+    match ev {
+        DragDropEvent::Enter { .. } => {
+            if shelf::set_drag_hover(true) {
+                refresh_overlay(app);
+            }
+            let _ = app.emit("notch-drag", true);
+        }
+        DragDropEvent::Over { .. } => {}
+        DragDropEvent::Leave => {
+            if shelf::set_drag_hover(false) {
+                refresh_overlay(app);
+            }
+            let _ = app.emit("notch-drag", false);
+        }
+        DragDropEvent::Drop { paths, .. } => {
+            shelf::set_drag_hover(false);
+            shelf::add_paths(paths.clone());
+            shelf::emit(app);
+            let _ = app.emit("notch-drag", false);
+            refresh_overlay(app);
+        }
+        _ => {}
+    }
+}
+
 /// Endort le WebView principal pendant une session : moins de CPU/RAM pendant le jeu.
 fn sleep_main_ui(app: &AppHandle) {
     overlay::set_main_background(true);
@@ -936,9 +1014,15 @@ pub fn run_app() {
         })
         .on_window_event(|window, event| {
             if window.label() == "overlay" {
-                if let WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window.hide();
+                match event {
+                    WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    WindowEvent::DragDrop(ev) => {
+                        handle_overlay_drop(window.app_handle(), ev);
+                    }
+                    _ => {}
                 }
                 return;
             }
@@ -982,6 +1066,13 @@ pub fn run_app() {
             toggle_overlay_visibility,
             open_main,
             hide_notch,
+            get_media,
+            media_toggle,
+            shelf_list,
+            shelf_add,
+            shelf_remove,
+            shelf_clear,
+            shelf_drag,
             get_system_info,
             list_games,
             list_installed,

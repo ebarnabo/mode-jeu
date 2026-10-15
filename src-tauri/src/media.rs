@@ -1,0 +1,134 @@
+//! Lecture / pause du média Windows actuellement exposé au SMTC.
+use serde::Serialize;
+
+#[derive(Serialize, Clone, Default)]
+pub struct MediaNow {
+    pub playing: bool,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+}
+
+#[cfg(windows)]
+mod win {
+    use super::MediaNow;
+    use std::mem::size_of;
+    use std::sync::Mutex;
+    use windows::Media::Control::{
+        GlobalSystemMediaTransportControlsSessionManager as Manager,
+        GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
+    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+    };
+
+    static MGR: Mutex<Option<Manager>> = Mutex::new(None);
+
+    fn manager() -> Option<Manager> {
+        if let Ok(g) = MGR.lock() {
+            if let Some(m) = g.as_ref() {
+                return Some(m.clone());
+            }
+        }
+        let m = Manager::RequestAsync().ok()?.get().ok()?;
+        if let Ok(mut g) = MGR.lock() {
+            *g = Some(m.clone());
+        }
+        Some(m)
+    }
+
+    pub fn now() -> MediaNow {
+        let Some(mgr) = manager() else {
+            return MediaNow::default();
+        };
+        let Ok(session) = mgr.GetCurrentSession() else {
+            return MediaNow::default();
+        };
+        let playing = session
+            .GetPlaybackInfo()
+            .ok()
+            .and_then(|i| i.PlaybackStatus().ok())
+            .map(|s| s == Status::Playing)
+            .unwrap_or(false);
+        let props = session
+            .TryGetMediaPropertiesAsync()
+            .ok()
+            .and_then(|op| op.get().ok());
+        let title = props
+            .as_ref()
+            .and_then(|p| p.Title().ok())
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
+        let artist = props
+            .as_ref()
+            .and_then(|p| p.Artist().ok())
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
+        MediaNow {
+            playing,
+            title,
+            artist,
+        }
+    }
+
+    pub fn toggle() -> MediaNow {
+        if let Some(mgr) = manager() {
+            if let Ok(session) = mgr.GetCurrentSession() {
+                let _ = session.TryTogglePlayPauseAsync().and_then(|op| op.get());
+                return now();
+            }
+        }
+        media_key();
+        now()
+    }
+
+    fn media_key() {
+        const VK_MEDIA_PLAY_PAUSE: VIRTUAL_KEY = VIRTUAL_KEY(0xB3);
+        let down = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_MEDIA_PLAY_PAUSE,
+                    wScan: 0,
+                    dwFlags: Default::default(),
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        let up = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_MEDIA_PLAY_PAUSE,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        let inputs = [down, up];
+        unsafe {
+            let _ = SendInput(&inputs, size_of::<INPUT>() as i32);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod win {
+    use super::MediaNow;
+    pub fn now() -> MediaNow {
+        MediaNow::default()
+    }
+    pub fn toggle() -> MediaNow {
+        MediaNow::default()
+    }
+}
+
+pub fn now() -> MediaNow {
+    win::now()
+}
+
+pub fn toggle() -> MediaNow {
+    win::toggle()
+}
