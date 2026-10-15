@@ -117,14 +117,7 @@ export function SoftwarePanel() {
   };
 
   return (
-    <section className="animate-rise space-y-5">
-      <div>
-        <h2 className="font-display text-lg font-semibold text-paper">PC</h2>
-        <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
-          Disques et état SMART dès l’ouverture. Logiciels et classer seulement si tu les lances.
-        </p>
-      </div>
-
+    <section className="space-y-5">
       <div className="flex gap-1 rounded-2xl border border-line bg-surface/70 p-1">
         {(
           [
@@ -258,7 +251,7 @@ export function SoftwarePanel() {
               />
               <AdviceGroup
                 title="Utile"
-                hint="Apps que tu utilises — à garder, ou à fermer seulement en mode jeu."
+                hint="À garder, ou à fermer seulement en mode jeu."
                 tone="useful"
                 items={report.useful}
                 onUninstall={setPending}
@@ -293,8 +286,8 @@ export function SoftwarePanel() {
             </h3>
             <p className="mt-3 text-[13px] leading-relaxed text-muted">
               {busyId
-                ? "Le désinstalleur officiel est ouvert. Accepte l’UAC s’il apparaît, puis termine la désinstallation. On attend la fin."
-                : "Windows lance le désinstalleur officiel (MSI ou unins000), avec élévation si le logiciel est installé pour tout le PC."}
+                ? "Termine dans la fenêtre Windows. On attend."
+                : "Windows ouvre le désinstalleur officiel, avec UAC si besoin."}
             </p>
             <div className="mt-6 flex flex-col gap-2">
               <Button disabled={!!busyId} onClick={() => void confirmUninstall()}>

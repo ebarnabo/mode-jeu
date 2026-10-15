@@ -54,10 +54,6 @@ export function MonitorPicker({
           onClick={() => onModeChange("game")}
         />
       </div>
-      <p className="text-[13px] text-muted">
-        Clique un écran pour le définir comme{" "}
-        {mode === "overlay" ? "overlay de perfs" : "source FPS"}.
-      </p>
       <div className="overflow-hidden rounded-2xl border border-line bg-ink/60 p-4">
         <svg
           viewBox={`0 0 ${viewW} ${viewH}`}
@@ -110,10 +106,6 @@ export function MonitorPicker({
           })}
         </svg>
       </div>
-      <div className="flex flex-wrap gap-3 text-[12px] text-muted">
-        <Legend swatch="bg-brass/40 border-brass" label="Sélection active" />
-        <Legend swatch="bg-raised border-line" label="Autre écran" />
-      </div>
     </div>
   );
 }
@@ -143,11 +135,3 @@ function ModeChip({
   );
 }
 
-function Legend({ swatch, label }: { swatch: string; label: string }) {
-  return (
-    <span className="inline-flex items-center gap-2">
-      <span className={cn("h-3 w-5 rounded border", swatch)} />
-      {label}
-    </span>
-  );
-}

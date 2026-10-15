@@ -488,34 +488,21 @@ export default function App() {
       )}
       <header
         data-tauri-drag-region
-        className="relative z-10 flex items-start justify-between gap-4 px-7 pb-4 pt-7"
+        className="relative z-10 px-7 pb-4 pt-7"
       >
-        <div>
-          <h1 className="font-display text-[28px] font-semibold leading-none tracking-tight text-paper">
-            {active ? "Session active" : "Prêt à jouer"}
-          </h1>
-          <p className="mt-2 text-[13px] text-muted">
-            {active
-              ? `${session?.closed_names.length ?? 0} apps en pause · ${session!.freed_mb} Mo libérés`
-              : "Le superflu se ferme à l’activation. Rien n’est scanné tant que tu n’ouvres pas un onglet."}
+        <h1 className="font-display text-[28px] font-semibold leading-none tracking-tight text-paper">
+          {active ? "Session active" : "Prêt à jouer"}
+        </h1>
+        {active && (
+          <p className="mt-2 text-[13px] tabular-nums text-muted">
+            {session?.closed_names.length ?? 0} apps en pause · {session!.freed_mb} Mo
           </p>
-        </div>
-        <div
-          className={cn(
-            "mt-1 flex h-9 items-center gap-2 rounded-full border px-3 text-[12px] font-semibold",
-            active
-              ? "border-jade/35 bg-jade/10 text-jade"
-              : "border-line bg-surface/80 text-muted"
-          )}
-        >
-          <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-jade" : "bg-muted/60")} />
-          {active ? "Actif" : "Veille"}
-        </div>
+        )}
       </header>
 
       <UpdateBar gameMode={active} />
 
-      <nav className="relative z-10 mx-7 mb-5 flex gap-1 rounded-2xl border border-line bg-surface/70 p-1 backdrop-blur-sm">
+      <nav className="relative z-10 mx-7 mb-5 flex gap-1 rounded-2xl border border-line bg-surface/70 p-1">
         {TABS.map(({ id, label, icon: Icon }) => {
           const on = tab === id;
           return (
@@ -539,15 +526,19 @@ export default function App() {
 
       <main className="scroll-area relative z-10 flex-1 overflow-y-auto px-7" style={{ paddingBottom: 132 }}>
         {tab === "session" && (
-          <section className="animate-rise space-y-6">
+          <section>
             {active ? (
-              <div className="relative overflow-hidden rounded-[28px] border border-line bg-gradient-to-br from-raised via-surface to-ink p-7">
-                <div className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-brass/10 blur-3xl" />
-                <div className="relative grid gap-8 sm:grid-cols-2">
-                  <Stat value={session!.freed_mb} unit="Mo" label="Mémoire libérée" accent />
-                  <Stat value={session!.closed_names.length} label="Apps en pause" />
-                </div>
-              </div>
+              session!.closed_names.length > 0 ? (
+                <ul className="space-y-2">
+                  {session!.closed_names.map((name, i) => (
+                    <li key={`${name}-${i}`} className="truncate text-[14px] text-paper">
+                      {name}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-[13px] text-muted">Aucune app mise en pause.</p>
+              )
             ) : (
               <p className="max-w-[42ch] text-[15px] leading-relaxed text-muted">
                 Un bouton. Steam, Discord et Windows restent. Le reste se coupe le temps de jouer.
@@ -557,17 +548,10 @@ export default function App() {
         )}
 
         {tab === "apps" && (
-          <section className="animate-rise space-y-4">
-            <div className="flex items-end justify-between gap-4">
-              <div>
-                <h2 className="font-display text-lg font-semibold text-paper">À garder</h2>
-                <p className="mt-1 text-[13px] text-muted">
-                  Ces apps restent ouvertes pendant le mode jeu.
-                </p>
-              </div>
-              <span className="rounded-full border border-line bg-surface px-3 py-1 text-[12px] font-semibold text-muted">
-                {config.keep.length} à garder
-              </span>
+          <section className="space-y-4">
+            <div>
+              <h2 className="font-display text-lg font-semibold text-paper">À garder</h2>
+              <p className="mt-1 text-[13px] text-muted">Restent ouvertes en mode jeu.</p>
             </div>
 
             <div className="flex flex-wrap gap-1.5">
@@ -749,31 +733,27 @@ export default function App() {
         )}
 
         {tab === "jeux" && (
-          <section className="animate-rise space-y-5">
-            <div>
-              <h2 className="font-display text-lg font-semibold text-paper">Jeux</h2>
-              <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
-                Auto = activation sans demander. Sinon, Mode Jeu propose d’activer.
-              </p>
-            </div>
+          <section className="space-y-5">
+            <p className="max-w-[48ch] text-[13px] leading-relaxed text-muted">
+              Auto = sans demander. Sinon, une proposition à l’ouverture.
+            </p>
 
-            <div className="rounded-2xl border border-line bg-surface/60 px-5 py-4">
-              <Setting
+            <div className="overflow-hidden rounded-2xl border border-line bg-surface/60">
+              <OptionRow
                 label="Surveiller les lancements"
-                hint="Off : aucun scan en fond. On : demande ou auto quand un jeu s’ouvre."
+                hint="Off : rien en fond. On : demande ou auto à l’ouverture."
                 checked={config.watch_games !== false}
                 onChange={(v) => {
                   void patch({ watch_games: v });
                   if (v) void invoke("ensure_game_watch");
                 }}
+                last
               />
             </div>
 
             {!gamesLoaded ? (
               <div className="rounded-2xl border border-dashed border-line px-5 py-10 text-center">
-                <p className="text-[13px] text-muted">
-                  Steam, Epic et les jeux ouverts. Rien n’est lu tant que tu n’as pas cherché.
-                </p>
+                <p className="text-[13px] text-muted">Rien n’est lu tant que tu n’as pas cherché.</p>
                 <Button className="mt-5" onClick={() => void loadGames()} disabled={gamesBusy}>
                   {gamesBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                   Chercher les jeux
@@ -865,40 +845,29 @@ export default function App() {
         {tab === "pc" && <SoftwarePanel />}
 
         {tab === "overlay" && (
-          <section className="animate-rise space-y-6">
-            <div>
-              <h2 className="font-display text-lg font-semibold text-paper">Overlay</h2>
-              <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
-                Panneau CPU / GPU / FPS pendant le jeu. Inactif tant que tu ne l’allumes pas.
-              </p>
-            </div>
-
-            <div className="space-y-4 rounded-2xl border border-line bg-surface/60 p-5">
-              <Setting
+          <section className="space-y-8">
+            <div className="overflow-hidden rounded-2xl border border-line bg-surface/60">
+              <OptionRow
                 label="Montrer l’overlay"
-                hint="Pendant le mode jeu uniquement, sauf si tu actives la ligne suivante."
+                hint="Pendant le mode jeu, sauf si tu gardes hors session."
                 checked={config.overlay.enabled}
                 onChange={(v) => patchOverlay({ enabled: v, hidden: false })}
               />
-              <Divider />
-              <Setting
+              <OptionRow
                 label="Garder hors session"
-                hint="Le panneau reste à l’écran même en veille."
+                hint="Le panneau reste à l’écran en veille."
                 checked={config.overlay.always}
                 onChange={(v) => patchOverlay({ always: v })}
               />
-            </div>
-
-            <div className="space-y-4 rounded-2xl border border-line bg-surface/60 p-5">
-              <Setting
-                label="Notch (app réduite)"
-                hint="Capsule type Notch Nook quand Mode Jeu est dans la barre des tâches. Masquée pendant un jeu."
+              <OptionRow
+                label="Notch"
+                hint="Capsule quand l’app est dans la barre des tâches. Masquée pendant un jeu."
                 checked={config.overlay.notch !== false}
                 onChange={(v) => patchOverlay({ notch: v })}
+                last
               />
               {config.overlay.notch !== false && (
-                <>
-                  <Divider />
+                <div className="space-y-4 border-t border-line/80 px-5 py-4">
                   <div>
                     <p className="mb-2 text-[13px] font-semibold text-paper">Position</p>
                     <div className="grid grid-cols-3 gap-2">
@@ -959,26 +928,24 @@ export default function App() {
                       </div>
                     </div>
                   )}
-                </>
+                </div>
               )}
             </div>
 
-            <div className="rounded-2xl border border-line bg-surface/60 p-5">
-              <MonitorPicker
-                monitors={monitors}
-                overlayName={config.overlay.monitor_name}
-                gameName={config.overlay.game_monitor_name}
-                mode={monitorMode}
-                onModeChange={setMonitorMode}
-                onSelect={(name) =>
-                  patchOverlay(
-                    monitorMode === "overlay"
-                      ? { monitor_name: name }
-                      : { game_monitor_name: name }
-                  )
-                }
-              />
-            </div>
+            <MonitorPicker
+              monitors={monitors}
+              overlayName={config.overlay.monitor_name}
+              gameName={config.overlay.game_monitor_name}
+              mode={monitorMode}
+              onModeChange={setMonitorMode}
+              onSelect={(name) =>
+                patchOverlay(
+                  monitorMode === "overlay"
+                    ? { monitor_name: name }
+                    : { game_monitor_name: name }
+                )
+              }
+            />
 
             <div>
               <p className="mb-3 text-[13px] font-semibold text-paper">Métriques</p>
@@ -1009,8 +976,8 @@ export default function App() {
               </div>
             </div>
 
-            <div className="grid gap-5 sm:grid-cols-2">
-              <div className="rounded-2xl border border-line bg-surface/60 p-5">
+            <div className="grid gap-8 sm:grid-cols-2">
+              <div>
                 <p className="mb-3 text-[13px] font-semibold text-paper">Coin</p>
                 <div className="grid grid-cols-2 gap-2">
                   {(
@@ -1038,11 +1005,11 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="space-y-5 rounded-2xl border border-line bg-surface/60 p-5">
+              <div className="space-y-5">
                 <div>
                   <div className="mb-2 flex items-center justify-between">
                     <p className="text-[13px] font-semibold text-paper">Opacité</p>
-                    <span className="font-mono text-[12px] text-paper">
+                    <span className="font-mono text-[12px] tabular-nums text-paper">
                       {config.overlay.opacity}%
                     </span>
                   </div>
@@ -1085,13 +1052,8 @@ export default function App() {
         )}
 
         {tab === "options" && (
-          <section className="animate-rise space-y-4">
-            <div>
-              <h2 className="font-display text-lg font-semibold text-paper">Options</h2>
-              <p className="mt-1 text-[13px] text-muted">
-                Appliqués à l’activation, annulés à la sortie.
-              </p>
-            </div>
+          <section className="space-y-4">
+            <p className="text-[13px] text-muted">Appliqués à l’activation, annulés à la sortie.</p>
             <UpdatesPanel gameMode={active} />
             <div className="flex justify-end">
               <Button size="sm" variant="outline" onClick={applyAmdProfile}>
@@ -1262,57 +1224,6 @@ export default function App() {
   );
 }
 
-function Stat({
-  value,
-  unit,
-  label,
-  accent,
-}: {
-  value: number;
-  unit?: string;
-  label: string;
-  accent?: boolean;
-}) {
-  return (
-    <div>
-      <div className="flex items-baseline gap-2">
-        <span
-          className={cn(
-            "font-display text-[52px] font-semibold leading-none tracking-tighter",
-            accent ? "text-brass" : "text-paper"
-          )}
-        >
-          {value}
-        </span>
-        {unit && <span className="text-base font-medium text-muted">{unit}</span>}
-      </div>
-      <p className="mt-3 text-[13px] text-muted">{label}</p>
-    </div>
-  );
-}
-
-function Setting({
-  label,
-  hint,
-  checked,
-  onChange,
-}: {
-  label: string;
-  hint: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-6">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-paper">{label}</p>
-        <p className="mt-1 text-[13px] leading-relaxed text-muted">{hint}</p>
-      </div>
-      <Switch checked={checked} onCheckedChange={onChange} className="mt-0.5 shrink-0" />
-    </div>
-  );
-}
-
 function OptionRow({
   label,
   hint,
@@ -1340,8 +1251,4 @@ function OptionRow({
       <Switch checked={checked} onCheckedChange={onChange} className="mt-0.5 shrink-0" />
     </div>
   );
-}
-
-function Divider() {
-  return <div className="h-px bg-line/80" />;
 }

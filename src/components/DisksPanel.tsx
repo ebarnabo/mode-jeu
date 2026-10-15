@@ -91,10 +91,6 @@ export function DisksPanel() {
 
   return (
     <div className="space-y-4">
-      <p className="text-[13px] leading-relaxed text-muted">
-        SMART firmware. SSD : TRIM. HDD : défrag si mécanique.
-      </p>
-
       {error && (
         <p className="rounded-xl border border-[#E8A07A]/30 bg-[#E8A07A]/10 px-4 py-3 text-[13px] text-[#E8A07A]">
           {error}
@@ -110,32 +106,19 @@ export function DisksPanel() {
       {disks.map((d) => (
         <article
           key={d.index}
-          className="overflow-hidden rounded-[24px] border border-line bg-gradient-to-br from-raised via-surface to-ink"
+          className="overflow-hidden rounded-2xl border border-line bg-surface/60"
         >
           <div className="p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex min-w-0 items-start gap-3">
-                <DiskStatusIcon status={d.status} kind={d.kind} label={d.status_label} />
-                <div className="min-w-0">
-                  <p className="text-[12px] text-muted">
-                    {d.kind} · {d.bus} · {d.source}
-                  </p>
-                  <h3 className="mt-1 truncate font-display text-[20px] font-semibold tracking-tight text-paper">
-                    {d.model}
-                  </h3>
-                </div>
+            <div className="flex min-w-0 items-start gap-3">
+              <DiskStatusIcon status={d.status} kind={d.kind} label={d.status_label} />
+              <div className="min-w-0">
+                <h3 className="truncate font-display text-[18px] font-semibold tracking-tight text-paper">
+                  {d.model}
+                </h3>
+                <p className="mt-1 text-[12px] text-muted">
+                  {d.status_label} · {d.kind} · {d.bus}
+                </p>
               </div>
-              <span
-                className={cn(
-                  "shrink-0 rounded-full border px-3 py-1 text-[12px] font-semibold",
-                  d.status === "ok" && "border-jade/35 bg-jade/10 text-jade",
-                  d.status === "watch" && "border-brass/35 bg-brass/10 text-brass",
-                  (d.status === "bad" || d.status === "critical") &&
-                    "border-[#E8A07A]/40 bg-[#E8A07A]/10 text-[#E8A07A]"
-                )}
-              >
-                {d.status_label}
-              </span>
             </div>
 
             <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -143,7 +126,6 @@ export function DisksPanel() {
               <Metric
                 label="Usure"
                 value={d.wear_pct != null ? `${d.wear_pct}%` : "—"}
-                hint="Percentage Used"
               />
               <Metric
                 label="Spare"
@@ -159,15 +141,15 @@ export function DisksPanel() {
               />
             </div>
 
-            <div className="mt-4 space-y-2">
+            <div className="mt-4 space-y-3">
               {d.volumes.map((v) => (
-                <div key={v.letter} className="rounded-xl border border-line/80 bg-ink/40 px-3 py-2.5">
+                <div key={v.letter}>
                   <div className="flex items-center justify-between gap-2 text-[13px]">
                     <span className="font-semibold text-paper">
                       {v.letter} {v.label && <span className="font-normal text-muted">{v.label}</span>}
                     </span>
-                    <span className="font-mono text-[12px] text-muted">
-                      {v.free_gb} / {v.total_gb} Go libres
+                    <span className="font-mono text-[12px] tabular-nums text-muted">
+                      {v.free_gb} / {v.total_gb} Go
                     </span>
                   </div>
                   <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-line">
@@ -187,13 +169,20 @@ export function DisksPanel() {
               <p className="mt-3 text-[12px] text-muted">Fragmentation mesurée : {d.frag_pct} %</p>
             )}
 
-            <ul className="mt-4 space-y-1.5">
-              {d.advice.map((a) => (
-                <li key={a} className="text-[12px] leading-relaxed text-muted">
-                  · {a}
-                </li>
-              ))}
-            </ul>
+            {d.advice.length > 0 && (
+              <details className="mt-4">
+                <summary className="cursor-pointer text-[12px] font-semibold text-muted hover:text-paper">
+                  Conseils
+                </summary>
+                <ul className="mt-2 space-y-1.5">
+                  {d.advice.map((a) => (
+                    <li key={a} className="text-[12px] leading-relaxed text-muted">
+                      {a}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
 
             <div className="mt-5 flex flex-wrap gap-2">
               {d.volumes.map((v) => (
@@ -290,14 +279,13 @@ function DiskStatusIcon({
   );
 }
 
-function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <p className="text-[11px] font-medium text-muted">{label}</p>
-      <p className="mt-1 font-display text-[22px] font-semibold leading-none tracking-tight text-paper">
+      <p className="mt-1 font-display text-[20px] font-semibold leading-none tracking-tight tabular-nums text-paper">
         {value}
       </p>
-      {hint && <p className="mt-1 text-[10px] text-muted/80">{hint}</p>}
     </div>
   );
 }

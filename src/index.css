@@ -8,8 +8,16 @@
   body {
     @apply bg-ink text-paper font-sans;
     font-feature-settings: "ss01";
+    caret-color: #d6a64a;
     user-select: none;
     overflow: hidden;
+  }
+  ::selection {
+    background: rgba(214, 166, 74, 0.35);
+    color: #f4f1ea;
+  }
+  a {
+    text-underline-offset: 0.18em;
   }
   html.overlay-root,
   body.overlay-body,
@@ -65,9 +73,6 @@
     animation-delay: 80ms;
   }
 
-  .power-ignition__kicker {
-    animation: power-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.05s both;
-  }
   .power-ignition__title {
     text-wrap: balance;
     animation: power-rise 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;

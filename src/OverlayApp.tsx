@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { AppWindow, EyeOff, File, Folder, Pause, Play, X } from "lucide-react";
+import { EyeOff, File, Folder, Pause, Play, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type OverlayConfig = {
@@ -262,6 +262,7 @@ export default function OverlayApp() {
               type="button"
               className="flex items-center gap-2"
               title="Ouvrir Mode Jeu"
+              aria-label="Ouvrir Mode Jeu"
               onClick={() => run("app", "open_main")}
             >
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brass shadow-[0_0_6px_rgba(214,166,74,.85)]" />
@@ -279,7 +280,7 @@ export default function OverlayApp() {
               <span className="ml-1 text-[9px] font-medium text-muted">CPU</span>
             </span>
             <span className="h-4 w-px bg-white/10" />
-            <NotchBtn label={mediaLabel} onClick={toggleMedia}>
+            <NotchBtn label={mediaLabel} onClick={toggleMedia} hot={media.playing}>
               {media.playing ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
             </NotchBtn>
             <span className="ml-auto flex items-center">
@@ -289,13 +290,6 @@ export default function OverlayApp() {
                 onClick={() => run("hide", "hide_notch")}
               >
                 <EyeOff className="h-3 w-3" />
-              </NotchBtn>
-              <NotchBtn
-                label="Ouvrir"
-                disabled={busy !== null}
-                onClick={() => run("app", "open_main")}
-              >
-                <AppWindow className="h-3 w-3" />
               </NotchBtn>
             </span>
           </div>
@@ -336,9 +330,6 @@ export default function OverlayApp() {
                   Dépose ici
                 </span>
               )}
-              {!dropHover && shelf.length === 0 && (
-                <span className="px-1 text-[10px] text-muted">Glisse un fichier</span>
-              )}
             </div>
           )}
         </div>
@@ -355,9 +346,6 @@ export default function OverlayApp() {
         className="flex h-full flex-col justify-center rounded-2xl border border-white/12 px-4 py-3 shadow-[0_16px_48px_rgba(0,0,0,.5)]"
         style={{ background: `rgba(14, 15, 18, ${opacity})` }}
       >
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-brass/85">
-          Mode Jeu
-        </div>
         <div className="flex flex-col gap-1.5">
           {rows.map((r) => (
             <div key={r.label} className="flex items-baseline justify-between gap-4">
@@ -383,11 +371,13 @@ function NotchBtn({
   children,
   onClick,
   disabled,
+  hot,
 }: {
   label: string;
   children: ReactNode;
   onClick: (e: MouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
+  hot?: boolean;
 }) {
   return (
     <button
@@ -399,7 +389,10 @@ function NotchBtn({
         e.stopPropagation();
         onClick(e);
       }}
-      className="flex h-7 w-7 items-center justify-center rounded-full text-paper/70 transition-[transform,background-color,color] duration-[150ms] ease-out hover:bg-white/8 hover:text-paper active:scale-[0.97] disabled:opacity-40"
+      className={cn(
+        "flex h-7 w-7 items-center justify-center rounded-full transition-[transform,background-color,color] duration-[150ms] ease-out hover:bg-white/8 active:scale-[0.97] disabled:opacity-40",
+        hot ? "text-brass hover:text-brass" : "text-paper/70 hover:text-paper"
+      )}
     >
       {children}
     </button>

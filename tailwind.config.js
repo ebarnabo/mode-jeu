@@ -20,10 +20,6 @@ export default {
         mono: ["JetBrains Mono", "ui-monospace", "monospace"],
       },
       borderRadius: { xl: "16px", "2xl": "24px", "3xl": "32px" },
-      keyframes: {
-        rise: { from: { opacity: "0", transform: "translateY(8px)" }, to: { opacity: "1", transform: "none" } },
-      },
-      animation: { rise: "rise .35s cubic-bezier(.22,1,.36,1) both" },
     },
   },
   plugins: [],

@@ -159,7 +159,7 @@ export function UpdateBar({ gameMode }: { gameMode: boolean }) {
   }
 
   return (
-    <div className="animate-rise mx-8 mb-2 overflow-hidden rounded-2xl border border-line bg-raised">
+    <div className="mx-8 mb-2 overflow-hidden rounded-2xl border border-line bg-raised">
       {state.phase === "downloading" && (
         <div
           className="h-0.5 bg-brass transition-[width] duration-200"

@@ -63,10 +63,7 @@ export function PowerIgnition({
       <div className="power-ignition__ring power-ignition__ring--late absolute left-1/2 top-[42%] h-72 w-72 -translate-x-1/2 -translate-y-1/2" />
 
       <div className="absolute inset-x-0 top-[34%] flex flex-col items-center px-8 text-center">
-        <p className="power-ignition__kicker text-[11px] font-semibold uppercase tracking-[0.28em] text-brass">
-          Ignition
-        </p>
-        <p className="power-ignition__title mt-3 font-display text-[42px] font-semibold leading-none tracking-tight text-paper">
+        <p className="power-ignition__title font-display text-[42px] font-semibold leading-none tracking-tight text-paper">
           Puissance engagée
         </p>
         <div className="power-ignition__meter mt-6 flex items-baseline gap-2">
