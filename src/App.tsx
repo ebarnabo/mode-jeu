@@ -676,7 +676,7 @@ export default function App() {
                     <div
                       key={p.key}
                       className={cn(
-                        "flex items-center gap-3 px-3 py-3.5 transition-colors hover:bg-raised/70",
+                        "list-row flex items-center gap-3 px-3 py-3.5 transition-colors hover:bg-raised/70",
                         i > 0 && "border-t border-line/80",
                         p.kept && "bg-brass/[0.04]",
                         isSel && "bg-brass/10"
@@ -791,7 +791,7 @@ export default function App() {
                     <div
                       key={g.id}
                       className={cn(
-                        "flex items-center gap-3 px-4 py-3.5",
+                        "list-row flex items-center gap-3 px-4 py-3.5",
                         i > 0 && "border-t border-line/80",
                         g.running && "bg-jade/[0.04]"
                       )}

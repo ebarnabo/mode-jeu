@@ -206,6 +206,7 @@ export default function OverlayApp() {
   };
 
   if (!cfg) return null;
+  if (!overlayLive) return null;
 
   const opacity = Math.min(100, Math.max(35, cfg.opacity)) / 100;
 

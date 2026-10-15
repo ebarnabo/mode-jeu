@@ -234,7 +234,7 @@ export function SoftwarePanel() {
                 <div
                   key={a.id}
                   className={cn(
-                    "flex items-center gap-3 px-4 py-3.5",
+                    "list-row flex items-center gap-3 px-4 py-3.5",
                     i > 0 && "border-t border-line/80"
                   )}
                 >
@@ -265,6 +265,7 @@ export function SoftwarePanel() {
                       </p>
                     )}
                   </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
                   {a.folder && (
                     <Button
                       size="sm"
@@ -293,6 +294,7 @@ export function SoftwarePanel() {
                   ) : (
                     <span className="shrink-0 text-[11px] font-semibold text-muted">Impossible</span>
                   )}
+                  </div>
                 </div>
               ))
             )}

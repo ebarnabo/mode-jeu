@@ -819,7 +819,7 @@ fn refresh_overlay(app: &AppHandle) {
 }
 
 fn show_main(app: &AppHandle) {
-    overlay::set_main_background(false);
+    overlay::set_main_background(app, false);
     overlay::clear_notch_snooze();
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
@@ -918,7 +918,7 @@ fn handle_overlay_drop(app: &AppHandle, ev: &DragDropEvent) {
 
 /// Endort le WebView principal pendant une session : moins de CPU/RAM pendant le jeu.
 fn sleep_main_ui(app: &AppHandle) {
-    overlay::set_main_background(true);
+    overlay::set_main_background(app, true);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.minimize();
         let _ = w.hide();
@@ -1115,7 +1115,7 @@ pub fn run_app() {
                 WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
                     let _ = window.minimize();
-                    overlay::set_main_background(true);
+                    overlay::set_main_background(window.app_handle(), true);
                     refresh_overlay(window.app_handle());
                 }
                 WindowEvent::Resized(_) => {
@@ -1123,14 +1123,14 @@ pub fn run_app() {
                     // envoie un resize avant d’être vraiment minimisé.
                     let bg = window.is_minimized().unwrap_or(false)
                         || !window.is_visible().unwrap_or(true);
-                    if bg && overlay::set_main_background(true) {
+                    if bg && overlay::set_main_background(window.app_handle(), true) {
                         refresh_overlay(window.app_handle());
                     }
                 }
                 WindowEvent::Focused(true) => {
                     let bg = window.is_minimized().unwrap_or(false)
                         || !window.is_visible().unwrap_or(true);
-                    if overlay::set_main_background(bg) {
+                    if overlay::set_main_background(window.app_handle(), bg) {
                         refresh_overlay(window.app_handle());
                     }
                 }

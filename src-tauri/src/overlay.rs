@@ -94,10 +94,36 @@ pub struct OverlayPayload {
 
 static MAIN_BG: AtomicBool = AtomicBool::new(false);
 static NOTCH_SNOOZE: AtomicBool = AtomicBool::new(false);
+static MAIN_QUIET: AtomicBool = AtomicBool::new(false);
+static OVERLAY_QUIET: AtomicBool = AtomicBool::new(false);
 
-/// true si l’état a changé.
-pub fn set_main_background(bg: bool) -> bool {
-    MAIN_BG.swap(bg, Ordering::SeqCst) != bg
+/// true si l’état a changé. Endort aussi le WebView principal : WebView2
+/// ne signale pas toujours `document.hidden` quand la fenêtre est minimisée.
+pub fn set_main_background(app: &AppHandle, bg: bool) -> bool {
+    let changed = MAIN_BG.swap(bg, Ordering::SeqCst) != bg;
+    if changed {
+        if let Some(win) = app.get_webview_window("main") {
+            set_page_quiet(&win, bg);
+        }
+    }
+    changed
+}
+
+fn set_page_quiet(win: &WebviewWindow, quiet: bool) {
+    let flag = if win.label() == "overlay" {
+        &OVERLAY_QUIET
+    } else {
+        &MAIN_QUIET
+    };
+    if flag.swap(quiet, Ordering::SeqCst) == quiet {
+        return;
+    }
+    let js = if quiet {
+        "document.documentElement.dataset.quiet='1'"
+    } else {
+        "delete document.documentElement.dataset.quiet"
+    };
+    let _ = win.eval(js);
 }
 
 pub fn snooze_notch() {
@@ -233,10 +259,12 @@ pub fn sync_overlay(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) {
     let notch = should_show_notch(app, cfg, game_active);
     let card = cfg.enabled && !cfg.hidden && (game_active || cfg.always) && !notch;
     if !notch && !card {
+        set_page_quiet(&win, true);
         let _ = win.hide();
         metrics::set_sample_mode(metrics::SAMPLE_OFF);
         return;
     }
+    set_page_quiet(&win, false);
     if let Err(e) = place_overlay(app, &win, cfg, notch) {
         eprintln!("overlay place: {e}");
     }
