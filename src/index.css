@@ -208,7 +208,7 @@
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
   .overlay-notch:hover { transform: none; }
-  .mascot__l, .mascot__r, .mascot__glyph, .mascot__spin { animation: none !important; filter: none !important; }
+  .mascot__l, .mascot__r, .mascot__glyph, .mascot__spin, .mascot__look, .mascot__eye { animation: none !important; filter: none !important; }
 }
 
 /* WebView2 garde souvent document.hidden à false quand la fenêtre est masquée. */
@@ -254,6 +254,27 @@ html[data-quiet="1"] *::after {
   stroke-width: 1.6;
   transition: stroke 280ms ease;
 }
+.mascot__sclera { fill: #f7f4ee; }
+.mascot__pupil { fill: #14161b; }
+.mascot__look {
+  transform-origin: 24px 16px;
+  animation: mascot-look 7.2s ease-in-out infinite;
+}
+.mascot__eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mascot-blink 5.6s ease-in-out infinite;
+}
+.mascot__eye--r { animation-delay: 40ms; }
+.mascot[data-mood="music"] .mascot__look { animation: mascot-look-music 2.2s ease-in-out infinite; }
+.mascot[data-mood="warn"] .mascot__eye { animation: none; transform: scaleY(0.45); }
+.mascot[data-mood="warn"] .mascot__look { animation: none; transform: translate(0, -0.6px); }
+.mascot[data-mood="hot"] .mascot__look { animation: mascot-dart 0.62s ease-in-out infinite; }
+.mascot[data-mood="hot"] .mascot__eye { animation-duration: 2.4s; }
+.mascot[data-mood="catch"] .mascot__look { animation: none; transform: translate(0, -1.2px); }
+.mascot[data-mood="catch"] .mascot__eye { animation: none; transform: scaleY(1.15); }
+.mascot[data-mood="hold"] .mascot__look { animation: none; transform: translate(0, 1.1px); }
+.mascot[data-mood="hold"] .mascot__eye { animation-duration: 7.5s; }
 .mascot__l, .mascot__r {
   fill: #f2f3f5;
   transition: d 520ms cubic-bezier(.22, 1, .36, 1);
@@ -330,4 +351,25 @@ html[data-quiet="1"] *::after {
 @keyframes mascot-r-hot {
   0%, 100% { d: path("M23.4 27.8C25.4 24 30 18 34 18.6C38.4 19.4 38.4 26.4 34.4 28.4C31.4 30 26.2 30 23.4 27.8Z"); }
   50% { d: path("M23.6 28.2C25.4 25 30.2 19.6 33.6 20.2C37.4 20.8 37.2 26.8 34 28.6C31.4 30 26.4 30.2 23.6 28.2Z"); }
+}
+@keyframes mascot-look {
+  0%, 100% { transform: translate(0, 0); }
+  28% { transform: translate(0.85px, 0.15px); }
+  52% { transform: translate(-0.9px, 0.1px); }
+  78% { transform: translate(0.2px, -0.25px); }
+}
+@keyframes mascot-look-music {
+  0%, 100% { transform: translate(0, 0); }
+  40% { transform: translate(0.4px, -0.35px); }
+  70% { transform: translate(-0.35px, 0.2px); }
+}
+@keyframes mascot-blink {
+  0%, 46%, 52%, 100% { transform: scaleY(1); }
+  49% { transform: scaleY(0.08); }
+}
+@keyframes mascot-dart {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(1.3px, -0.2px); }
+  50% { transform: translate(-1.4px, 0.35px); }
+  75% { transform: translate(0.8px, 0.15px); }
 }

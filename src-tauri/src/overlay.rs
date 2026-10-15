@@ -49,6 +49,18 @@ pub struct OverlayConfig {
     pub notch_position: String,
     #[serde(default)]
     pub notch_monitor_name: Option<String>,
+    /// Une capsule sur chaque écran. Les fenêtres en plus n’existent que tant que la notch est visible.
+    #[serde(default)]
+    pub notch_all_screens: bool,
+    /// Capsule réduite à l’avatar. Un clic la rouvre.
+    #[serde(default)]
+    pub notch_compact: bool,
+    #[serde(default = "default_true")]
+    pub notch_show_ram: bool,
+    #[serde(default = "default_true")]
+    pub notch_show_cpu: bool,
+    #[serde(default = "default_true")]
+    pub notch_show_media: bool,
     #[serde(default = "default_opacity")]
     pub opacity: u8,
     #[serde(default = "default_position")]
@@ -75,6 +87,11 @@ impl Default for OverlayConfig {
             notch: true,
             notch_position: "top-center".into(),
             notch_monitor_name: None,
+            notch_all_screens: false,
+            notch_compact: false,
+            notch_show_ram: true,
+            notch_show_cpu: true,
+            notch_show_media: true,
             opacity: 88,
             position: "top-right".into(),
             interval_ms: 3000,
@@ -90,6 +107,7 @@ pub struct OverlayPayload {
     pub config: OverlayConfig,
     pub session_active: bool,
     pub notch_visible: bool,
+    pub music_row: bool,
 }
 
 static MAIN_BG: AtomicBool = AtomicBool::new(false);
@@ -110,7 +128,12 @@ pub fn set_main_background(app: &AppHandle, bg: bool) -> bool {
 }
 
 fn set_page_quiet(win: &WebviewWindow, quiet: bool) {
-    let flag = if win.label() == "overlay" {
+    let label = win.label();
+    if label != "overlay" && label != "main" {
+        let _ = win.eval(quiet_js(quiet));
+        return;
+    }
+    let flag = if label == "overlay" {
         &OVERLAY_QUIET
     } else {
         &MAIN_QUIET
@@ -118,12 +141,15 @@ fn set_page_quiet(win: &WebviewWindow, quiet: bool) {
     if flag.swap(quiet, Ordering::SeqCst) == quiet {
         return;
     }
-    let js = if quiet {
+    let _ = win.eval(quiet_js(quiet));
+}
+
+fn quiet_js(quiet: bool) -> &'static str {
+    if quiet {
         "document.documentElement.dataset.quiet='1'"
     } else {
         "delete document.documentElement.dataset.quiet"
-    };
-    let _ = win.eval(js);
+    }
 }
 
 pub fn snooze_notch() {
@@ -132,6 +158,16 @@ pub fn snooze_notch() {
 
 pub fn clear_notch_snooze() {
     NOTCH_SNOOZE.store(false, Ordering::SeqCst);
+}
+
+static MUSIC_ROW: AtomicBool = AtomicBool::new(false);
+
+pub fn set_music_row(open: bool) {
+    MUSIC_ROW.store(open, Ordering::SeqCst);
+}
+
+pub fn music_row() -> bool {
+    MUSIC_ROW.load(Ordering::Relaxed)
 }
 
 fn main_is_background(app: &AppHandle) -> bool {
@@ -156,6 +192,7 @@ pub fn payload(app: &AppHandle, cfg: &OverlayConfig, session_active: bool) -> Ov
         config: cfg.clone(),
         session_active,
         notch_visible: should_show_notch(app, cfg, session_active),
+        music_row: music_row(),
     }
 }
 
@@ -262,6 +299,7 @@ pub fn sync_overlay(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) {
         set_page_quiet(&win, true);
         let _ = win.hide();
         metrics::set_sample_mode(metrics::SAMPLE_OFF);
+        sync_mirrors(app, cfg, false);
         return;
     }
     set_page_quiet(&win, false);
@@ -272,6 +310,7 @@ pub fn sync_overlay(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) {
     let _ = win.set_ignore_cursor_events(!notch);
     let _ = win.set_always_on_top(true);
     let _ = win.show();
+    sync_mirrors(app, cfg, notch);
     metrics::set_sample_mode(if notch {
         metrics::SAMPLE_LIGHT
     } else {
@@ -312,25 +351,8 @@ fn place_overlay(
         let mon = pick_notch_monitor(&monitors, cfg.notch_monitor_name.as_deref())
             .ok_or_else(|| "aucun moniteur".to_string())?;
         let scale = mon.scale.max(1.0);
-        let extra = crate::shelf::expanded();
-        let width = ((if extra { 560.0 } else { 480.0 }) * scale).round() as u32;
-        let height = ((if extra { 104.0 } else { 56.0 }) * scale).round() as u32;
-        let inset = (20.0 * scale).round() as i32;
-        let pos = cfg.notch_position.as_str();
-        let x = match pos {
-            "top-left" | "bottom-left" => mon.x + inset,
-            "top-right" | "bottom-right" => mon.x + mon.width as i32 - width as i32 - inset,
-            _ => mon.x + (mon.width as i32 - width as i32) / 2,
-        };
-        let y = if pos.starts_with("bottom") {
-            mon.y + mon.height as i32 - height as i32
-        } else {
-            mon.y
-        };
-        win.set_size(PhysicalSize::new(width, height))
-            .map_err(|e| e.to_string())?;
-        win.set_position(PhysicalPosition::new(x, y))
-            .map_err(|e| e.to_string())?;
+        let (width, height) = notch_size(cfg, scale);
+        place_notch_at(win, mon, &cfg.notch_position, width, height)?;
         return Ok(());
     }
 
@@ -383,4 +405,122 @@ fn place_overlay(
 
 pub fn toggle_hidden(cfg: &mut OverlayConfig) {
     cfg.hidden = !cfg.hidden;
+}
+
+fn notch_size(cfg: &OverlayConfig, scale: f64) -> (u32, u32) {
+    let shelf = crate::shelf::expanded();
+    let music = music_row();
+    let extra = !cfg.notch_compact && (shelf || music);
+    let mut logical: f64 = 132.0;
+    if cfg.notch_show_ram {
+        logical += 96.0;
+    }
+    if cfg.notch_show_cpu {
+        logical += 84.0;
+    }
+    if cfg.notch_show_media {
+        logical += 148.0;
+    }
+    if extra {
+        logical = logical.max(560.0);
+    }
+    if cfg.notch_compact {
+        logical = 52.0;
+    }
+    let height = if cfg.notch_compact {
+        44.0
+    } else if shelf && music {
+        148.0
+    } else if extra {
+        108.0
+    } else {
+        56.0
+    };
+    (
+        (logical * scale).round() as u32,
+        (height * scale).round() as u32,
+    )
+}
+
+fn place_notch_at(
+    win: &WebviewWindow,
+    mon: &MonitorInfo,
+    pos: &str,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    let scale = mon.scale.max(1.0);
+    let inset = (20.0 * scale).round() as i32;
+    let x = match pos {
+        "top-left" | "bottom-left" => mon.x + inset,
+        "top-right" | "bottom-right" => mon.x + mon.width as i32 - width as i32 - inset,
+        _ => mon.x + (mon.width as i32 - width as i32) / 2,
+    };
+    let y = if pos.starts_with("bottom") {
+        mon.y + mon.height as i32 - height as i32
+    } else {
+        mon.y
+    };
+    win.set_size(PhysicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    win.set_position(PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn create_notch_window(app: &AppHandle, label: &str) -> Option<WebviewWindow> {
+    use tauri::webview::WebviewWindowBuilder;
+    use tauri::WebviewUrl;
+    WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html?window=overlay".into()))
+        .title(" ")
+        .inner_size(220.0, 48.0)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .focused(false)
+        .shadow(false)
+        .additional_browser_args("--disable-background-networking --disable-component-update --disable-sync --disable-features=Translate,MediaRouter --mute-audio")
+        .build()
+        .ok()
+}
+
+fn sync_mirrors(app: &AppHandle, cfg: &OverlayConfig, notch: bool) {
+    let monitors = list_monitors(app).unwrap_or_default();
+    let chosen = pick_notch_monitor(&monitors, cfg.notch_monitor_name.as_deref()).map(|m| m.name.clone());
+    let mut keep: Vec<String> = Vec::new();
+    if notch && cfg.notch_all_screens {
+        for (i, mon) in monitors.iter().enumerate().take(8) {
+            if chosen.as_ref() == Some(&mon.name) {
+                continue;
+            }
+            let label = format!("notch-{i}");
+            let win = match app.get_webview_window(&label) {
+                Some(w) => w,
+                None => match create_notch_window(app, &label) {
+                    Some(w) => w,
+                    None => continue,
+                },
+            };
+            let scale = mon.scale.max(1.0);
+            let (width, height) = notch_size(cfg, scale);
+            if place_notch_at(&win, mon, &cfg.notch_position, width, height).is_ok() {
+                set_page_quiet(&win, false);
+                let _ = win.set_always_on_top(true);
+                let _ = win.show();
+                keep.push(label);
+            }
+        }
+    }
+    for i in 0..8 {
+        let label = format!("notch-{i}");
+        if keep.iter().any(|k| k == &label) {
+            continue;
+        }
+        if let Some(w) = app.get_webview_window(&label) {
+            let _ = w.destroy();
+        }
+    }
 }

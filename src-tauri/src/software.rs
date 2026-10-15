@@ -794,6 +794,89 @@ pub fn analyze(procs: &[ProcGroup]) -> AnalyzeReport {
     }
 }
 
+#[derive(Serialize, Clone)]
+pub struct MusicApp {
+    pub name: String,
+    pub path: String,
+    pub added: bool,
+}
+
+const MUSIC_NAMES: &[&str] = &[
+    "spotify", "deezer", "tidal", "apple music", "itunes", "foobar", "aimp", "musicbee",
+    "vlc", "winamp", "clementine", "strawberry", "doppler", "cider", "amazon music",
+    "youtube music", "plexamp", "audirvana", "mediamonkey", "groove music", "media player",
+];
+
+fn is_music_name(name: &str) -> bool {
+    let n = name.to_lowercase();
+    MUSIC_NAMES.iter().any(|h| n.contains(h))
+}
+
+fn push_exe(out: &mut Vec<MusicApp>, name: &str, path: String, seen: &mut HashSet<String>) {
+    let key = path.to_lowercase();
+    if !Path::new(&path).is_file() || !seen.insert(key) {
+        return;
+    }
+    out.push(MusicApp {
+        name: name.to_string(),
+        path,
+        added: false,
+    });
+}
+
+fn exe_in_dir(dir: &Path, hint: &str) -> Option<String> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let hint = hint.to_lowercase();
+    let mut fallback = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("exe")) != Some(true) {
+            continue;
+        }
+        let file = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+        if file.contains("unins") || file.contains("update") || file.contains("crash") || file.contains("setup") {
+            continue;
+        }
+        if hint.split_whitespace().any(|w| w.len() > 3 && file.contains(w)) {
+            return Some(path.to_string_lossy().into_owned());
+        }
+        if fallback.is_none() {
+            fallback = Some(path.to_string_lossy().into_owned());
+        }
+    }
+    fallback
+}
+
+pub fn discover_music() -> Vec<MusicApp> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        push_exe(&mut out, "Spotify", format!(r"{appdata}\Spotify\Spotify.exe"), &mut seen);
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        push_exe(&mut out, "Deezer", format!(r"{local}\Deezer\Deezer.exe"), &mut seen);
+        push_exe(&mut out, "TIDAL", format!(r"{local}\TIDAL\TIDAL.exe"), &mut seen);
+        push_exe(&mut out, "Amazon Music", format!(r"{local}\Amazon Music\Amazon Music.exe"), &mut seen);
+    }
+    for root in [std::env::var("ProgramFiles").ok(), std::env::var("ProgramFiles(x86)").ok()].into_iter().flatten() {
+        push_exe(&mut out, "VLC", format!(r"{root}\VideoLAN\VLC\vlc.exe"), &mut seen);
+        push_exe(&mut out, "foobar2000", format!(r"{root}\foobar2000\foobar2000.exe"), &mut seen);
+        push_exe(&mut out, "AIMP", format!(r"{root}\AIMP\AIMP.exe"), &mut seen);
+        push_exe(&mut out, "MusicBee", format!(r"{root}\MusicBee\MusicBee.exe"), &mut seen);
+        push_exe(&mut out, "Winamp", format!(r"{root}\Winamp\winamp.exe"), &mut seen);
+    }
+    for app in list_installed() {
+        if !is_music_name(&app.name) {
+            continue;
+        }
+        let Some(folder) = app.folder.as_deref() else { continue };
+        let Some(exe) = exe_in_dir(Path::new(folder), &app.name) else { continue };
+        push_exe(&mut out, &app.name, exe, &mut seen);
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

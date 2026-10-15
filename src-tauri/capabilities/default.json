@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Permissions par défaut",
-  "windows": ["main", "overlay"],
+  "windows": ["main", "overlay", "notch-0", "notch-1", "notch-2", "notch-3", "notch-4", "notch-5", "notch-6", "notch-7"],
   "permissions": [
     "core:default",
     "updater:default",

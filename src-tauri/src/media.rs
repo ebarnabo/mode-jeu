@@ -86,27 +86,52 @@ mod win {
         }
     }
 
-    pub fn toggle() -> MediaNow {
-        if let Some(mgr) = manager() {
-            if let Ok(session) = mgr.GetCurrentSession() {
-                let _ = session.TryTogglePlayPauseAsync().and_then(|op| op.get());
-                if let Ok(mut g) = CACHE.lock() {
-                    *g = None;
-                }
-                return now();
-            }
+    pub fn next() -> MediaNow {
+        if !act(|s| s.TrySkipNextAsync()) {
+            media_key(0xB0);
         }
-        media_key();
         now()
     }
 
-    fn media_key() {
-        const VK_MEDIA_PLAY_PAUSE: VIRTUAL_KEY = VIRTUAL_KEY(0xB3);
+    pub fn previous() -> MediaNow {
+        if !act(|s| s.TrySkipPreviousAsync()) {
+            media_key(0xB1);
+        }
+        now()
+    }
+
+    pub fn toggle() -> MediaNow {
+        if !act(|s| s.TryTogglePlayPauseAsync()) {
+            media_key(0xB3);
+        }
+        now()
+    }
+
+    fn act<F>(f: F) -> bool
+    where
+        F: FnOnce(
+            windows::Media::Control::GlobalSystemMediaTransportControlsSession,
+        ) -> windows::core::Result<windows::Foundation::IAsyncOperation<bool>>,
+    {
+        if let Some(mgr) = manager() {
+            if let Ok(session) = mgr.GetCurrentSession() {
+                let _ = f(session).and_then(|op| op.get());
+                if let Ok(mut g) = CACHE.lock() {
+                    *g = None;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    fn media_key(vk: u16) {
+        let key = VIRTUAL_KEY(vk);
         let down = INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
                 ki: KEYBDINPUT {
-                    wVk: VK_MEDIA_PLAY_PAUSE,
+                    wVk: key,
                     wScan: 0,
                     dwFlags: Default::default(),
                     time: 0,
@@ -118,7 +143,7 @@ mod win {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
                 ki: KEYBDINPUT {
-                    wVk: VK_MEDIA_PLAY_PAUSE,
+                    wVk: key,
                     wScan: 0,
                     dwFlags: KEYEVENTF_KEYUP,
                     time: 0,
@@ -142,6 +167,12 @@ mod win {
     pub fn toggle() -> MediaNow {
         MediaNow::default()
     }
+    pub fn next() -> MediaNow {
+        MediaNow::default()
+    }
+    pub fn previous() -> MediaNow {
+        MediaNow::default()
+    }
 }
 
 pub fn now() -> MediaNow {
@@ -150,4 +181,12 @@ pub fn now() -> MediaNow {
 
 pub fn toggle() -> MediaNow {
     win::toggle()
+}
+
+pub fn next() -> MediaNow {
+    win::next()
+}
+
+pub fn previous() -> MediaNow {
+    win::previous()
 }

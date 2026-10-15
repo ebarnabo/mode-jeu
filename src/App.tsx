@@ -51,6 +51,11 @@ type OverlayConfig = {
   notch: boolean;
   notch_position: string;
   notch_monitor_name: string | null;
+  notch_all_screens?: boolean;
+  notch_compact?: boolean;
+  notch_show_ram?: boolean;
+  notch_show_cpu?: boolean;
+  notch_show_media?: boolean;
   opacity: number;
   position: string;
   interval_ms: number;
@@ -83,6 +88,7 @@ type Config = {
   watch_games: boolean;
   auto_game_exes: string[];
   extra_games: { exe: string; name: string }[];
+  music_launchers?: { name: string; path: string }[];
   overlay: OverlayConfig;
 };
 
@@ -151,6 +157,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [procs, setProcs] = useState<ProcGroup[]>([]);
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
+  const [musicApps, setMusicApps] = useState<{ name: string; path: string; added: boolean }[]>([]);
   const [monitorMode, setMonitorMode] = useState<"overlay" | "game">("overlay");
   const [tab, setTab] = useState<Tab>("session");
   const [query, setQuery] = useState("");
@@ -187,8 +194,13 @@ export default function App() {
   }, [tab, busy]);
 
   useEffect(() => {
-    if (tab !== "overlay" || monitors.length > 0) return;
-    invoke<MonitorInfo[]>("list_monitors").then(setMonitors).catch(() => {});
+    if (tab !== "overlay") return;
+    if (monitors.length === 0) {
+      invoke<MonitorInfo[]>("list_monitors").then(setMonitors).catch(() => {});
+    }
+    invoke<{ name: string; path: string; added: boolean }[]>("list_music_apps")
+      .then(setMusicApps)
+      .catch(() => {});
   }, [tab, monitors.length]);
 
   useEffect(() => {
@@ -909,16 +921,31 @@ export default function App() {
                     <div>
                       <p className="mb-2 text-[13px] font-semibold text-paper">Écran</p>
                       <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => patchOverlay({ notch_all_screens: true })}
+                          className={cn(
+                            "rounded-xl border px-3 py-2 text-[12px] font-semibold transition-colors",
+                            config.overlay.notch_all_screens
+                              ? "border-brass/35 bg-brass/12 text-brass"
+                              : "border-line bg-ink/40 text-muted hover:text-paper"
+                          )}
+                        >
+                          Tous
+                        </button>
                         {monitors.map((m, i) => {
-                          const selected = config.overlay.notch_monitor_name
-                            ? config.overlay.notch_monitor_name === m.name
-                            : m.is_primary;
+                          const selected =
+                            !config.overlay.notch_all_screens &&
+                            (config.overlay.notch_monitor_name
+                              ? config.overlay.notch_monitor_name === m.name
+                              : m.is_primary);
                           return (
                             <button
                               key={m.name}
                               type="button"
                               onClick={() =>
                                 patchOverlay({
+                                  notch_all_screens: false,
                                   notch_monitor_name: m.is_primary ? null : m.name,
                                 })
                               }
@@ -936,6 +963,82 @@ export default function App() {
                       </div>
                     </div>
                   )}
+                  <div>
+                    <p className="mb-2 text-[13px] font-semibold text-paper">Dans la notch</p>
+                    <div className="flex flex-wrap gap-2">
+                      {(
+                        [
+                          ["notch_show_ram", "RAM", config.overlay.notch_show_ram !== false],
+                          ["notch_show_cpu", "CPU", config.overlay.notch_show_cpu !== false],
+                          ["notch_show_media", "Lecture", config.overlay.notch_show_media !== false],
+                        ] as const
+                      ).map(([key, label, on]) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => patchOverlay({ [key]: !on })}
+                          className={cn(
+                            "rounded-xl border px-3 py-2 text-[12px] font-semibold transition-colors",
+                            on
+                              ? "border-brass/35 bg-brass/12 text-brass"
+                              : "border-line bg-ink/40 text-muted hover:text-paper"
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <p className="text-[13px] font-semibold text-paper">Lecteurs</p>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-muted hover:text-paper"
+                        onClick={() =>
+                          invoke<{ name: string; path: string; added: boolean }[]>("pick_music_app")
+                            .then(setMusicApps)
+                            .catch(() => {})
+                        }
+                      >
+                        Ajouter
+                      </button>
+                    </div>
+                    {musicApps.length === 0 ? (
+                      <p className="text-[12px] text-muted">
+                        Aucun lecteur trouvé. Ajoute l’exécutable s’il n’est pas détecté.
+                      </p>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {musicApps.map((app) => (
+                          <li
+                            key={app.path}
+                            className="flex items-center gap-2 rounded-xl border border-line bg-ink/40 px-3 py-2"
+                          >
+                            <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-paper">
+                              {app.name}
+                            </span>
+                            {app.added && (
+                              <button
+                                type="button"
+                                className="text-[11px] font-semibold text-muted hover:text-paper"
+                                onClick={() =>
+                                  invoke<{ name: string; path: string; added: boolean }[]>(
+                                    "remove_music_app",
+                                    { path: app.path }
+                                  )
+                                    .then(setMusicApps)
+                                    .catch(() => {})
+                                }
+                              >
+                                Retirer
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

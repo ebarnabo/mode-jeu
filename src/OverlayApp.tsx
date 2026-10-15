@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { EyeOff, File, Folder, Pause, Play, X } from "lucide-react";
+import { EyeOff, File, Folder, Minus, Music, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
 import { NotchMascot } from "@/components/NotchMascot";
 import { cn } from "@/lib/utils";
 
@@ -15,11 +15,16 @@ type OverlayConfig = {
   show_ram: boolean;
   notch: boolean;
   notch_position: string;
+  notch_compact?: boolean;
+  notch_show_ram?: boolean;
+  notch_show_cpu?: boolean;
+  notch_show_media?: boolean;
   opacity: number;
   interval_ms: number;
   hidden: boolean;
   session_active: boolean;
   notch_visible: boolean;
+  music_row?: boolean;
 };
 
 type Metrics = {
@@ -48,6 +53,12 @@ type ShelfItem = {
   is_dir: boolean;
 };
 
+type MusicApp = {
+  name: string;
+  path: string;
+  added: boolean;
+};
+
 function fmt(n: number | null | undefined, digits = 0) {
   if (n == null || Number.isNaN(n)) return "—";
   return n.toFixed(digits);
@@ -65,6 +76,7 @@ export default function OverlayApp() {
   const [media, setMedia] = useState<MediaNow>({ playing: false, title: null, artist: null });
   const [shelf, setShelf] = useState<ShelfItem[]>([]);
   const [dropHover, setDropHover] = useState(false);
+  const [musicApps, setMusicApps] = useState<MusicApp[]>([]);
 
   useEffect(() => {
     invoke<OverlayConfig>("get_overlay_config").then(setCfg).catch(() => {});
@@ -113,6 +125,11 @@ export default function OverlayApp() {
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [cfg, pollMs, overlayLive]);
+
+  useEffect(() => {
+    if (!cfg?.music_row) return;
+    invoke<MusicApp[]>("list_music_apps").then(setMusicApps).catch(() => {});
+  }, [cfg?.music_row]);
 
   useEffect(() => {
     if (!notchOn) return;
@@ -177,10 +194,10 @@ export default function OverlayApp() {
     }
   };
 
-  const toggleMedia = async (e: MouseEvent) => {
+  const toggleMedia = async (e: MouseEvent, cmd: "media_toggle" | "media_next" | "media_previous" = "media_toggle") => {
     e.stopPropagation();
     try {
-      setMedia(await invoke<MediaNow>("media_toggle"));
+      setMedia(await invoke<MediaNow>(cmd));
     } catch {
       /* silencieux */
     }
@@ -231,38 +248,57 @@ export default function OverlayApp() {
         : pos.endsWith("right")
           ? "right"
           : "center";
-    const roomy = dropHover || shelf.length > 0;
+    const showRam = cfg.notch_show_ram !== false;
+    const showCpu = cfg.notch_show_cpu !== false;
+    const showMedia = cfg.notch_show_media !== false;
+    const musicOpen = !!cfg.music_row;
+    const roomy = !cfg.notch_compact && (dropHover || shelf.length > 0 || musicOpen);
     const mediaLabel = media.title
       ? `${media.playing ? "Pause" : "Lecture"} · ${media.title}${media.artist ? ` — ${media.artist}` : ""}`
       : media.playing
         ? "Pause"
         : "Lecture";
+    const shell = cn(
+      "pointer-events-none flex h-full w-full select-none bg-transparent px-2",
+      bottom ? "items-end pt-2" : "items-start pb-2",
+      align
+    );
+    const pill = cn(
+      "overlay-notch pointer-events-auto flex max-w-full cursor-default flex-col gap-1.5 border-white/10 shadow-[0_12px_28px_rgba(0,0,0,.4)]",
+      cfg.notch_compact ? "px-1.5 py-1" : "px-3 py-1.5",
+      bottom ? "rounded-t-[18px] border border-b-0" : "rounded-b-[18px] border border-t-0",
+      bottom && roomy && "flex-col-reverse",
+      origin === "left" && "overlay-notch--left",
+      origin === "right" && "overlay-notch--right",
+      origin === "bottom" && "overlay-notch--bottom",
+      origin === "bottom-left" && "overlay-notch--bottom-left",
+      origin === "bottom-right" && "overlay-notch--bottom-right",
+      roomy && "overlay-notch--roomy"
+    );
+
+    if (cfg.notch_compact) {
+      return (
+        <div className={shell}>
+          <div className={pill} style={{ background: `rgba(8, 9, 12, ${Math.max(0.82, opacity)})` }}>
+            <NotchMascot
+              cpu={m?.cpu_pct ?? null}
+              ram={m?.ram_pct ?? null}
+              playing={media.playing}
+              holding={shelf.length > 0}
+              catching={dropHover}
+              track={media.title}
+              compact
+              onClick={() => invoke("set_notch_compact", { compact: false }).catch(() => {})}
+            />
+          </div>
+        </div>
+      );
+    }
 
     return (
-      <div
-        className={cn(
-          "pointer-events-none flex h-full w-full select-none bg-transparent px-2",
-          bottom ? "items-end pt-2" : "items-start pb-2",
-          align
-        )}
-      >
-        <div
-          className={cn(
-            "overlay-notch pointer-events-auto flex max-w-full cursor-default flex-col gap-1.5 border-white/10 px-3 py-1.5 shadow-[0_12px_28px_rgba(0,0,0,.4)]",
-            bottom
-              ? "rounded-t-[18px] border border-b-0"
-              : "rounded-b-[18px] border border-t-0",
-            bottom && roomy && "flex-col-reverse",
-            origin === "left" && "overlay-notch--left",
-            origin === "right" && "overlay-notch--right",
-            origin === "bottom" && "overlay-notch--bottom",
-            origin === "bottom-left" && "overlay-notch--bottom-left",
-            origin === "bottom-right" && "overlay-notch--bottom-right",
-            roomy && "overlay-notch--roomy"
-          )}
-          style={{ background: `rgba(8, 9, 12, ${Math.max(0.82, opacity)})` }}
-        >
-          <div className="flex items-center gap-2.5">
+      <div className={shell}>
+        <div className={pill} style={{ background: `rgba(8, 9, 12, ${Math.max(0.82, opacity)})` }}>
+          <div className="flex items-center gap-2">
             <NotchMascot
               cpu={m?.cpu_pct ?? null}
               ram={m?.ram_pct ?? null}
@@ -272,20 +308,53 @@ export default function OverlayApp() {
               track={media.title}
               onClick={() => run("app", "open_main")}
             />
-            <span className="h-4 w-px bg-white/10" />
-            <span className="font-mono text-[11px] font-semibold tabular-nums text-paper">
-              {m ? pair(m.ram_used_gb, m.ram_total_gb, 1) : "—"}
-              <span className="ml-1 text-[9px] font-medium text-muted">RAM</span>
-            </span>
-            <span className="font-mono text-[11px] font-semibold tabular-nums text-paper">
-              {m ? pair(m.cpu_pct, 100, 0) : "—"}
-              <span className="ml-1 text-[9px] font-medium text-muted">CPU</span>
-            </span>
-            <span className="h-4 w-px bg-white/10" />
-            <NotchBtn label={mediaLabel} onClick={toggleMedia} hot={media.playing}>
-              {media.playing ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
-            </NotchBtn>
+            {(showRam || showCpu || showMedia) && <span className="h-4 w-px bg-white/10" />}
+            {showRam && (
+              <span className="font-mono text-[11px] font-semibold tabular-nums text-paper">
+                {m ? pair(m.ram_used_gb, m.ram_total_gb, 1) : "—"}
+                <span className="ml-1 text-[9px] font-medium text-muted">RAM</span>
+              </span>
+            )}
+            {showCpu && (
+              <span className="font-mono text-[11px] font-semibold tabular-nums text-paper">
+                {m ? pair(m.cpu_pct, 100, 0) : "—"}
+                <span className="ml-1 text-[9px] font-medium text-muted">CPU</span>
+              </span>
+            )}
+            {showMedia && (showRam || showCpu) && <span className="h-4 w-px bg-white/10" />}
+            {showMedia && (
+              <>
+                <NotchBtn label="Précédent" onClick={(e) => toggleMedia(e, "media_previous")}>
+                  <SkipBack className="h-3 w-3" />
+                </NotchBtn>
+                <NotchBtn label={mediaLabel} onClick={(e) => toggleMedia(e, "media_toggle")} hot={media.playing}>
+                  {media.playing ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+                </NotchBtn>
+                <NotchBtn label="Suivant" onClick={(e) => toggleMedia(e, "media_next")}>
+                  <SkipForward className="h-3 w-3" />
+                </NotchBtn>
+                <NotchBtn
+                  label="Lecteurs"
+                  hot={musicOpen}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    invoke("set_music_row", { open: !musicOpen }).catch(() => {});
+                  }}
+                >
+                  <Music className="h-3 w-3" />
+                </NotchBtn>
+              </>
+            )}
             <span className="ml-auto flex items-center">
+              <NotchBtn
+                label="Réduire"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  invoke("set_notch_compact", { compact: true }).catch(() => {});
+                }}
+              >
+                <Minus className="h-3 w-3" />
+              </NotchBtn>
               <NotchBtn
                 label="Masquer"
                 disabled={busy !== null}
@@ -296,7 +365,36 @@ export default function OverlayApp() {
             </span>
           </div>
 
-          {roomy && (
+          {musicOpen && (
+            <div className="flex max-w-[520px] items-center gap-1.5 overflow-x-auto pb-0.5">
+              {musicApps.map((app) => (
+                <button
+                  key={app.path}
+                  type="button"
+                  title={app.path}
+                  className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[10px] font-medium text-paper hover:border-brass/40 hover:text-brass"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    invoke("launch_music_app", { path: app.path }).catch(() => {});
+                  }}
+                >
+                  {app.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="shrink-0 rounded-full border border-dashed border-white/15 px-2.5 py-0.5 text-[10px] font-medium text-muted hover:text-paper"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  invoke<MusicApp[]>("pick_music_app").then(setMusicApps).catch(() => {});
+                }}
+              >
+                Ajouter
+              </button>
+            </div>
+          )}
+
+          {(dropHover || shelf.length > 0) && (
             <div
               className={cn(
                 "flex max-w-[520px] items-center gap-1.5 overflow-x-auto pb-0.5",

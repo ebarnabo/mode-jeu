@@ -100,6 +100,12 @@ pub struct ProcGroup {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+pub struct MusicLauncher {
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub keep: Vec<String>,
     #[serde(default = "default_true")]
@@ -158,6 +164,9 @@ pub struct Config {
     /// Jeux ajoutés manuellement depuis les process ouverts.
     #[serde(default)]
     pub extra_games: Vec<games::ExtraGame>,
+    /// Lecteurs ajoutés à la main quand l’installation n’a pas été reconnue.
+    #[serde(default)]
+    pub music_launchers: Vec<MusicLauncher>,
     #[serde(default)]
     pub overlay: OverlayConfig,
 }
@@ -206,6 +215,7 @@ impl Default for Config {
             watch_games: true,
             auto_game_exes: Vec::new(),
             extra_games: Vec::new(),
+            music_launchers: Vec::new(),
             overlay: OverlayConfig::default(),
         }
     }
@@ -851,6 +861,127 @@ fn media_toggle() -> media::MediaNow {
 }
 
 #[tauri::command]
+fn media_next() -> media::MediaNow {
+    media::next()
+}
+
+#[tauri::command]
+fn media_previous() -> media::MediaNow {
+    media::previous()
+}
+
+#[tauri::command]
+fn set_notch_compact(app: AppHandle, compact: bool) -> OverlayConfig {
+    let mut cfg = load_config(&app);
+    cfg.overlay.notch_compact = compact;
+    if compact {
+        overlay::set_music_row(false);
+    }
+    store_config(&app, &cfg);
+    sync_from_config(&app, &cfg);
+    cfg.overlay
+}
+
+#[tauri::command]
+fn set_music_row(app: AppHandle, open: bool) {
+    overlay::set_music_row(open);
+    refresh_overlay(&app);
+}
+
+#[derive(Serialize, Clone)]
+struct MusicApp {
+    name: String,
+    path: String,
+    added: bool,
+}
+
+fn merged_music(cfg: &Config) -> Vec<MusicApp> {
+    let mut apps: Vec<MusicApp> = software::discover_music()
+        .into_iter()
+        .map(|a| MusicApp {
+            name: a.name,
+            path: a.path,
+            added: false,
+        })
+        .collect();
+    let mut seen: std::collections::HashSet<String> =
+        apps.iter().map(|a| a.path.to_lowercase()).collect();
+    for extra in &cfg.music_launchers {
+        let key = extra.path.to_lowercase();
+        if extra.path.trim().is_empty() || !seen.insert(key) {
+            continue;
+        }
+        if !std::path::Path::new(&extra.path).is_file() {
+            continue;
+        }
+        apps.push(MusicApp {
+            name: extra.name.clone(),
+            path: extra.path.clone(),
+            added: true,
+        });
+    }
+    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps
+}
+
+#[tauri::command]
+fn list_music_apps(app: AppHandle) -> Vec<MusicApp> {
+    merged_music(&load_config(&app))
+}
+
+#[tauri::command]
+fn launch_music_app(path: String) -> Result<(), String> {
+    if !std::path::Path::new(&path).is_file() {
+        return Err("Cette application est introuvable.".into());
+    }
+    std::process::Command::new(&path)
+        .spawn()
+        .map_err(|_| "Impossible de lancer l’application.".to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn pick_music_app(app: AppHandle) -> Result<Vec<MusicApp>, String> {
+    let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object System.Windows.Forms.OpenFileDialog
+$f.Filter = 'Applications (*.exe)|*.exe'
+$f.Title = 'Choisir une application musicale'
+if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.FileName }
+"#;
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-STA", "-Command", script]);
+    let out = cmd
+        .output()
+        .map_err(|_| "Le sélecteur de fichier n’a pas démarré.".to_string())?;
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if path.is_empty() {
+        return Ok(merged_music(&load_config(&app)));
+    }
+    if !std::path::Path::new(&path).is_file() {
+        return Err("Fichier introuvable.".into());
+    }
+    let name = std::path::Path::new(&path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Musique".into());
+    let mut cfg = load_config(&app);
+    if !cfg.music_launchers.iter().any(|m| m.path.eq_ignore_ascii_case(&path)) {
+        cfg.music_launchers.push(MusicLauncher { name, path });
+        store_config(&app, &cfg);
+    }
+    Ok(merged_music(&cfg))
+}
+
+#[tauri::command]
+fn remove_music_app(app: AppHandle, path: String) -> Vec<MusicApp> {
+    let mut cfg = load_config(&app);
+    cfg.music_launchers.retain(|m| !m.path.eq_ignore_ascii_case(&path));
+    store_config(&app, &cfg);
+    merged_music(&cfg)
+}
+
+#[tauri::command]
 fn shelf_list() -> Vec<shelf::ShelfItem> {
     shelf::list()
 }
@@ -1095,11 +1226,13 @@ pub fn run_app() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() == "overlay" {
+            if window.label() == "overlay" || window.label().starts_with("notch-") {
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
-                        api.prevent_close();
-                        let _ = window.hide();
+                        if window.label() == "overlay" {
+                            api.prevent_close();
+                            let _ = window.hide();
+                        }
                     }
                     WindowEvent::DragDrop(ev) => {
                         handle_overlay_drop(window.app_handle(), ev);
@@ -1150,6 +1283,14 @@ pub fn run_app() {
             hide_notch,
             get_media,
             media_toggle,
+            media_next,
+            media_previous,
+            set_notch_compact,
+            set_music_row,
+            list_music_apps,
+            launch_music_app,
+            pick_music_app,
+            remove_music_app,
             shelf_list,
             shelf_add,
             shelf_remove,

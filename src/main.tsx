@@ -1,10 +1,21 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import OverlayApp from "./OverlayApp";
 import "./index.css";
 
-const isOverlay = new URLSearchParams(window.location.search).get("window") === "overlay";
+function isOverlayWindow() {
+  if (new URLSearchParams(window.location.search).get("window") === "overlay") return true;
+  try {
+    const label = getCurrentWindow().label;
+    return label === "overlay" || label.startsWith("notch-");
+  } catch {
+    return false;
+  }
+}
+
+const isOverlay = isOverlayWindow();
 
 if (isOverlay) {
   document.documentElement.classList.add("overlay-root");

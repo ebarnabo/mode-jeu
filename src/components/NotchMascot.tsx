@@ -9,12 +9,12 @@ const CALM_R =
 type Mood = "calm" | "music" | "warn" | "hot" | "catch" | "hold";
 
 const LABEL: Record<Mood, string> = {
-  calm: "Tout est calme",
+  calm: "PC tranquille",
   music: "Musique en cours",
-  warn: "Charge élevée",
+  warn: "Le PC monte en charge",
   hot: "PC saturé",
-  catch: "Prête à recevoir",
-  hold: "Fichiers au chaud",
+  catch: "Un fichier arrive",
+  hold: "Des fichiers sont posés",
 };
 
 export function NotchMascot({
@@ -24,6 +24,7 @@ export function NotchMascot({
   holding,
   catching,
   track,
+  compact,
   onClick,
 }: {
   cpu: number | null;
@@ -32,6 +33,7 @@ export function NotchMascot({
   holding: boolean;
   catching: boolean;
   track: string | null;
+  compact?: boolean;
   onClick: () => void;
 }) {
   const hot = (cpu ?? 0) >= 88 || (ram ?? 0) >= 92;
@@ -68,8 +70,8 @@ export function NotchMascot({
       className={cn("mascot", shifting && "is-shifting")}
       data-mood={mood}
       data-playing={playing ? "1" : "0"}
-      title={`Ouvrir Mode Jeu · ${label}`}
-      aria-label={`Ouvrir Mode Jeu. ${label}.`}
+      title={compact ? `${label}. Cliquer pour agrandir.` : `Ouvrir Mode Jeu · ${label}`}
+      aria-label={compact ? `${label}. Agrandir la notch.` : `Ouvrir Mode Jeu. ${label}.`}
       onClick={onClick}
     >
       <span className="mascot__spin">
@@ -78,6 +80,18 @@ export function NotchMascot({
           <g className="mascot__glyph">
             <path className="mascot__l" d={CALM_L} />
             <path className="mascot__r" d={CALM_R} />
+          </g>
+          <g className="mascot__eyes">
+            <g className="mascot__look">
+              <g className="mascot__eye mascot__eye--l">
+                <ellipse className="mascot__sclera" cx="17.6" cy="16.2" rx="2.35" ry="2.7" />
+                <circle className="mascot__pupil" cx="18" cy="16.6" r="1.05" />
+              </g>
+              <g className="mascot__eye mascot__eye--r">
+                <ellipse className="mascot__sclera" cx="29.4" cy="15.4" rx="2.2" ry="2.55" />
+                <circle className="mascot__pupil" cx="29.8" cy="15.8" r="1" />
+              </g>
+            </g>
           </g>
         </svg>
       </span>
