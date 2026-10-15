@@ -1,5 +1,6 @@
 use crate::metrics::{self, Metrics, MonitorRect};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
@@ -15,6 +16,9 @@ fn default_opacity() -> u8 {
 }
 fn default_position() -> String {
     "top-right".into()
+}
+fn default_notch_position() -> String {
+    "top-center".into()
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -38,9 +42,13 @@ pub struct OverlayConfig {
     pub show_fps: bool,
     #[serde(default = "default_true")]
     pub show_ram: bool,
-    /// Capsule en haut d’écran pendant le mode jeu (raccourcis + métriques).
+    /// Capsule type Notch Nook quand l’app est réduite (pas pendant un jeu).
     #[serde(default = "default_true")]
     pub notch: bool,
+    #[serde(default = "default_notch_position")]
+    pub notch_position: String,
+    #[serde(default)]
+    pub notch_monitor_name: Option<String>,
     #[serde(default = "default_opacity")]
     pub opacity: u8,
     #[serde(default = "default_position")]
@@ -65,6 +73,8 @@ impl Default for OverlayConfig {
             show_fps: true,
             show_ram: true,
             notch: true,
+            notch_position: "top-center".into(),
+            notch_monitor_name: None,
             opacity: 88,
             position: "top-right".into(),
             interval_ms: 2000,
@@ -79,21 +89,52 @@ pub struct OverlayPayload {
     #[serde(flatten)]
     pub config: OverlayConfig,
     pub session_active: bool,
+    pub notch_visible: bool,
 }
 
-pub fn payload(cfg: &OverlayConfig, session_active: bool) -> OverlayPayload {
+static MAIN_BG: AtomicBool = AtomicBool::new(false);
+static NOTCH_SNOOZE: AtomicBool = AtomicBool::new(false);
+
+/// true si l’état a changé.
+pub fn set_main_background(bg: bool) -> bool {
+    MAIN_BG.swap(bg, Ordering::SeqCst) != bg
+}
+
+pub fn snooze_notch() {
+    NOTCH_SNOOZE.store(true, Ordering::SeqCst);
+}
+
+pub fn clear_notch_snooze() {
+    NOTCH_SNOOZE.store(false, Ordering::SeqCst);
+}
+
+fn main_is_background(app: &AppHandle) -> bool {
+    if MAIN_BG.load(Ordering::Relaxed) {
+        return true;
+    }
+    let Some(w) = app.get_webview_window("main") else {
+        return true;
+    };
+    w.is_minimized().unwrap_or(false) || !w.is_visible().unwrap_or(true)
+}
+
+pub fn should_show_notch(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) -> bool {
+    cfg.notch
+        && !NOTCH_SNOOZE.load(Ordering::Relaxed)
+        && !game_active
+        && main_is_background(app)
+}
+
+pub fn payload(app: &AppHandle, cfg: &OverlayConfig, session_active: bool) -> OverlayPayload {
     OverlayPayload {
         config: cfg.clone(),
         session_active,
+        notch_visible: should_show_notch(app, cfg, session_active),
     }
 }
 
 pub fn emit_config(app: &AppHandle, cfg: &OverlayConfig, session_active: bool) {
-    let _ = app.emit("overlay-config", payload(cfg, session_active));
-}
-
-fn notch_active(cfg: &OverlayConfig, game_active: bool) -> bool {
-    cfg.notch && game_active
+    let _ = app.emit("overlay-config", payload(app, cfg, session_active));
 }
 
 #[derive(Serialize, Clone)]
@@ -186,24 +227,28 @@ pub fn get_metrics(app: &AppHandle, cfg: &OverlayConfig) -> Metrics {
 
 pub fn sync_overlay(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) {
     let Some(win) = app.get_webview_window("overlay") else {
-        metrics::set_sampling(false);
+        metrics::set_sample_mode(metrics::SAMPLE_OFF);
         return;
     };
-    let should_show = cfg.enabled && !cfg.hidden && (game_active || cfg.always);
-    if !should_show {
+    let notch = should_show_notch(app, cfg, game_active);
+    let card = cfg.enabled && !cfg.hidden && (game_active || cfg.always) && !notch;
+    if !notch && !card {
         let _ = win.hide();
-        metrics::set_sampling(false);
+        metrics::set_sample_mode(metrics::SAMPLE_OFF);
         return;
     }
-    if let Err(e) = place_overlay(app, &win, cfg, game_active) {
+    if let Err(e) = place_overlay(app, &win, cfg, notch) {
         eprintln!("overlay place: {e}");
     }
     let _ = win.set_skip_taskbar(true);
-    // La notch doit recevoir le survol et les clics ; le panneau coin reste transparent.
-    let _ = win.set_ignore_cursor_events(!notch_active(cfg, game_active));
+    let _ = win.set_ignore_cursor_events(!notch);
     let _ = win.set_always_on_top(true);
     let _ = win.show();
-    metrics::set_sampling(true);
+    metrics::set_sample_mode(if notch {
+        metrics::SAMPLE_LIGHT
+    } else {
+        metrics::SAMPLE_FULL
+    });
 }
 
 fn pick_monitor<'a>(monitors: &'a [MonitorInfo], name: Option<&str>) -> Option<&'a MonitorInfo> {
@@ -215,30 +260,47 @@ fn pick_monitor<'a>(monitors: &'a [MonitorInfo], name: Option<&str>) -> Option<&
     monitors.iter().find(|m| !m.is_primary).or(monitors.first())
 }
 
+fn pick_notch_monitor<'a>(
+    monitors: &'a [MonitorInfo],
+    name: Option<&str>,
+) -> Option<&'a MonitorInfo> {
+    if let Some(n) = name {
+        if let Some(m) = monitors.iter().find(|m| m.name == n) {
+            return Some(m);
+        }
+    }
+    monitors.iter().find(|m| m.is_primary).or(monitors.first())
+}
+
 fn place_overlay(
     app: &AppHandle,
     win: &WebviewWindow,
     cfg: &OverlayConfig,
-    game_active: bool,
+    notch: bool,
 ) -> Result<(), String> {
     let monitors = list_monitors(app)?;
-    let mon = pick_monitor(&monitors, cfg.monitor_name.as_deref())
-        .ok_or_else(|| "aucun moniteur".to_string())?;
 
-    let scale = mon.scale.max(1.0);
-
-    if notch_active(cfg, game_active) {
-        // Marge autour de la capsule pour le scale au survol (origine haut-centre).
-        let width = (640.0 * scale).round() as u32;
-        let height = (92.0 * scale).round() as u32;
-        let x = mon.x + (mon.width as i32 - width as i32) / 2;
-        let y = mon.y;
+    if notch {
+        let mon = pick_notch_monitor(&monitors, cfg.notch_monitor_name.as_deref())
+            .ok_or_else(|| "aucun moniteur".to_string())?;
+        let scale = mon.scale.max(1.0);
+        let width = (360.0 * scale).round() as u32;
+        let height = (56.0 * scale).round() as u32;
+        let inset = (20.0 * scale).round() as i32;
+        let x = match cfg.notch_position.as_str() {
+            "top-left" => mon.x + inset,
+            "top-right" => mon.x + mon.width as i32 - width as i32 - inset,
+            _ => mon.x + (mon.width as i32 - width as i32) / 2,
+        };
         win.set_size(PhysicalSize::new(width, height))
             .map_err(|e| e.to_string())?;
-        win.set_position(PhysicalPosition::new(x, y))
+        win.set_position(PhysicalPosition::new(x, mon.y))
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
+
+    let mon = pick_monitor(&monitors, cfg.monitor_name.as_deref())
+        .ok_or_else(|| "aucun moniteur".to_string())?;
 
     let mut lines = 0u32;
     if cfg.show_fps {

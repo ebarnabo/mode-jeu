@@ -540,7 +540,7 @@ fn get_metrics(app: AppHandle) -> metrics::Metrics {
 fn get_overlay_config(app: AppHandle) -> OverlayPayload {
     let cfg = load_config(&app);
     let session = sanitize_session(&app);
-    overlay::payload(&cfg.overlay, session.active)
+    overlay::payload(&app, &cfg.overlay, session.active)
 }
 
 #[tauri::command]
@@ -727,12 +727,22 @@ fn restore_session(app: &AppHandle) -> Session {
     empty
 }
 
+fn refresh_overlay(app: &AppHandle) {
+    let cfg = load_config(app);
+    let active = read_json::<Session>(app, "session.json").active;
+    overlay::sync_overlay(app, &cfg.overlay, active);
+    overlay::emit_config(app, &cfg.overlay, active);
+}
+
 fn show_main(app: &AppHandle) {
+    overlay::set_main_background(false);
+    overlay::clear_notch_snooze();
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
     }
+    refresh_overlay(app);
 }
 
 #[tauri::command]
@@ -740,8 +750,15 @@ fn open_main(app: AppHandle) {
     show_main(&app);
 }
 
+#[tauri::command]
+fn hide_notch(app: AppHandle) {
+    overlay::snooze_notch();
+    refresh_overlay(&app);
+}
+
 /// Endort le WebView principal pendant une session : moins de CPU/RAM pendant le jeu.
 fn sleep_main_ui(app: &AppHandle) {
+    overlay::set_main_background(true);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.minimize();
         let _ = w.hide();
@@ -918,14 +935,40 @@ pub fn run_app() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "overlay" {
+            if window.label() == "overlay" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     let _ = window.hide();
-                    return;
                 }
-                api.prevent_close();
-                let _ = window.minimize();
+                return;
+            }
+            if window.label() != "main" {
+                return;
+            }
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.minimize();
+                    overlay::set_main_background(true);
+                    refresh_overlay(window.app_handle());
+                }
+                WindowEvent::Resized(_) => {
+                    // Ne remet jamais « visible » ici : après Fermer, Windows
+                    // envoie un resize avant d’être vraiment minimisé.
+                    let bg = window.is_minimized().unwrap_or(false)
+                        || !window.is_visible().unwrap_or(true);
+                    if bg && overlay::set_main_background(true) {
+                        refresh_overlay(window.app_handle());
+                    }
+                }
+                WindowEvent::Focused(true) => {
+                    let bg = window.is_minimized().unwrap_or(false)
+                        || !window.is_visible().unwrap_or(true);
+                    if overlay::set_main_background(bg) {
+                        refresh_overlay(window.app_handle());
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -938,6 +981,7 @@ pub fn run_app() {
             get_overlay_config,
             toggle_overlay_visibility,
             open_main,
+            hide_notch,
             get_system_info,
             list_games,
             list_installed,

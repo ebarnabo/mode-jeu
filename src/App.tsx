@@ -49,6 +49,8 @@ type OverlayConfig = {
   show_fps: boolean;
   show_ram: boolean;
   notch: boolean;
+  notch_position: string;
+  notch_monitor_name: string | null;
   opacity: number;
   position: string;
   interval_ms: number;
@@ -885,13 +887,77 @@ export default function App() {
                 checked={config.overlay.always}
                 onChange={(v) => patchOverlay({ always: v })}
               />
-              <Divider />
+            </div>
+
+            <div className="space-y-4 rounded-2xl border border-line bg-surface/60 p-5">
               <Setting
-                label="Notch en mode jeu"
-                hint="Capsule en haut de l’écran d’overlay : RAM / CPU / GPU used/total et raccourcis."
+                label="Notch (app réduite)"
+                hint="Capsule type Notch Nook en haut d’écran quand Mode Jeu est dans la barre des tâches. Masquée pendant un jeu."
                 checked={config.overlay.notch !== false}
                 onChange={(v) => patchOverlay({ notch: v })}
               />
+              {config.overlay.notch !== false && (
+                <>
+                  <Divider />
+                  <div>
+                    <p className="mb-2 text-[13px] font-semibold text-paper">Position</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(
+                        [
+                          ["top-left", "Haut G"],
+                          ["top-center", "Haut C"],
+                          ["top-right", "Haut D"],
+                        ] as const
+                      ).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => patchOverlay({ notch_position: value })}
+                          className={cn(
+                            "rounded-xl border py-2.5 text-[12px] font-semibold transition-colors",
+                            (config.overlay.notch_position || "top-center") === value
+                              ? "border-brass/35 bg-brass/12 text-brass"
+                              : "border-line bg-ink/40 text-muted hover:text-paper"
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {monitors.length > 1 && (
+                    <div>
+                      <p className="mb-2 text-[13px] font-semibold text-paper">Écran</p>
+                      <div className="flex flex-wrap gap-2">
+                        {monitors.map((m, i) => {
+                          const selected = config.overlay.notch_monitor_name
+                            ? config.overlay.notch_monitor_name === m.name
+                            : m.is_primary;
+                          return (
+                            <button
+                              key={m.name}
+                              type="button"
+                              onClick={() =>
+                                patchOverlay({
+                                  notch_monitor_name: m.is_primary ? null : m.name,
+                                })
+                              }
+                              className={cn(
+                                "rounded-xl border px-3 py-2 text-[12px] font-semibold transition-colors",
+                                selected
+                                  ? "border-brass/35 bg-brass/12 text-brass"
+                                  : "border-line bg-ink/40 text-muted hover:text-paper"
+                              )}
+                            >
+                              {m.is_primary ? "Principal" : `Écran ${i + 1}`}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
 
             <div className="rounded-2xl border border-line bg-surface/60 p-5">
@@ -942,9 +1008,7 @@ export default function App() {
 
             <div className="grid gap-5 sm:grid-cols-2">
               <div className="rounded-2xl border border-line bg-surface/60 p-5">
-                <p className="mb-3 text-[13px] font-semibold text-paper">
-                  Coin {config.overlay.notch !== false ? "(hors notch)" : ""}
-                </p>
+                <p className="mb-3 text-[13px] font-semibold text-paper">Coin</p>
                 <div className="grid grid-cols-2 gap-2">
                   {(
                     [

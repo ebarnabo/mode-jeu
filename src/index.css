@@ -143,6 +143,8 @@
   transform-origin: top center;
   transition: transform 160ms ease;
 }
+.overlay-notch--left { transform-origin: top left; }
+.overlay-notch--right { transform-origin: top right; }
 
 @media (hover: hover) and (pointer: fine) {
   .overlay-notch:hover {

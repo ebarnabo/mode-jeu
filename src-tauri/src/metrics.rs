@@ -1,6 +1,6 @@
 //! Métriques légères : échantillonnage en arrière-plan, zéro spawn coûteux en hot path.
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use sysinfo::{Components, CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
@@ -94,8 +94,11 @@ static LATEST: Mutex<Metrics> = Mutex::new(Metrics {
 });
 static MONITOR: Mutex<Option<MonitorRect>> = Mutex::new(None);
 static STARTED: AtomicBool = AtomicBool::new(false);
-/// false = overlay masqué → le sampler dort (zéro coût GPU/ADL/RTSS).
-static SAMPLING: AtomicBool = AtomicBool::new(false);
+/// 0 = off, 1 = light (CPU/RAM), 2 = full (GPU/temps/FPS).
+static SAMPLE_MODE: AtomicU8 = AtomicU8::new(0);
+pub const SAMPLE_OFF: u8 = 0;
+pub const SAMPLE_LIGHT: u8 = 1;
+pub const SAMPLE_FULL: u8 = 2;
 
 #[derive(Clone, Copy)]
 pub struct MonitorRect {
@@ -105,10 +108,9 @@ pub struct MonitorRect {
     pub height: i32,
 }
 
-/// Active / coupe l'échantillonnage (lié à la visibilité de l'overlay).
-pub fn set_sampling(enabled: bool) {
-    SAMPLING.store(enabled, Ordering::SeqCst);
-    if enabled {
+pub fn set_sample_mode(mode: u8) {
+    SAMPLE_MODE.store(mode, Ordering::SeqCst);
+    if mode != SAMPLE_OFF {
         ensure_sampler();
     }
 }
@@ -118,7 +120,7 @@ pub fn collect(game_monitor: Option<MonitorRect>) -> Metrics {
     if let Ok(mut g) = MONITOR.lock() {
         *g = game_monitor;
     }
-    if SAMPLING.load(Ordering::Relaxed) {
+    if SAMPLE_MODE.load(Ordering::Relaxed) != SAMPLE_OFF {
         ensure_sampler();
     }
     LATEST
@@ -136,11 +138,12 @@ fn ensure_sampler() {
         .spawn(|| {
             let mut s = Sampler::new();
             loop {
-                if SAMPLING.load(Ordering::Relaxed) {
-                    tick(&mut s);
-                    std::thread::sleep(Duration::from_millis(2000));
+                let mode = SAMPLE_MODE.load(Ordering::Relaxed);
+                if mode != SAMPLE_OFF {
+                    tick(&mut s, mode);
+                    let wait = if mode == SAMPLE_LIGHT { 4000 } else { 2000 };
+                    std::thread::sleep(Duration::from_millis(wait));
                 } else {
-                    // Overlay off : idle quasi gratuit.
                     std::thread::sleep(Duration::from_millis(8000));
                 }
             }
@@ -148,9 +151,10 @@ fn ensure_sampler() {
         .ok();
 }
 
-fn tick(s: &mut Sampler) {
+fn tick(s: &mut Sampler, mode: u8) {
     let now = Instant::now();
     let mon = MONITOR.lock().ok().and_then(|g| *g);
+    let full = mode == SAMPLE_FULL;
 
     if now.duration_since(s.last_cpu) >= Duration::from_millis(1800) {
         s.sys.refresh_cpu_usage();
@@ -158,7 +162,7 @@ fn tick(s: &mut Sampler) {
         s.last_cpu = now;
     }
 
-    if now.duration_since(s.last_gpu) >= Duration::from_secs(4) {
+    if full && now.duration_since(s.last_gpu) >= Duration::from_secs(4) {
         let sample = query_gpu(s);
         s.gpu_pct = sample.util;
         s.gpu_temp = sample.temp;
@@ -167,13 +171,13 @@ fn tick(s: &mut Sampler) {
         s.last_gpu = now;
     }
 
-    if now.duration_since(s.last_temp) >= Duration::from_secs(8) {
+    if full && now.duration_since(s.last_temp) >= Duration::from_secs(8) {
         s.components.refresh();
         s.cpu_temp = cpu_temp_from_components(&s.components);
         s.last_temp = now;
     }
 
-    if now.duration_since(s.last_fps) >= Duration::from_millis(2000) {
+    if full && now.duration_since(s.last_fps) >= Duration::from_millis(2000) {
         s.fps = query_fps(s, mon);
         s.last_fps = now;
     }
@@ -193,12 +197,12 @@ fn tick(s: &mut Sampler) {
             ram_pct,
             ram_used_gb: ram_used,
             ram_total_gb: ram_total,
-            gpu_pct: s.gpu_pct,
-            gpu_used_gb: s.gpu_used_gb,
-            gpu_total_gb: s.gpu_total_gb,
-            cpu_temp_c: s.cpu_temp,
-            gpu_temp_c: s.gpu_temp,
-            fps: s.fps,
+            gpu_pct: if full { s.gpu_pct } else { None },
+            gpu_used_gb: if full { s.gpu_used_gb } else { None },
+            gpu_total_gb: if full { s.gpu_total_gb } else { None },
+            cpu_temp_c: if full { s.cpu_temp } else { None },
+            gpu_temp_c: if full { s.gpu_temp } else { None },
+            fps: if full { s.fps } else { None },
         };
     }
 }
