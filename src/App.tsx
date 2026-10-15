@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
+  ClipboardCopy,
   Gamepad2,
   Joystick,
   Lock,
@@ -56,6 +57,7 @@ type OverlayConfig = {
   notch_show_ram?: boolean;
   notch_show_cpu?: boolean;
   notch_show_media?: boolean;
+  notch_show_mascot?: boolean;
   opacity: number;
   position: string;
   interval_ms: number;
@@ -156,6 +158,9 @@ export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [procs, setProcs] = useState<ProcGroup[]>([]);
+  const [machineRamGb, setMachineRamGb] = useState<number | null>(null);
+  const [usedRamGb, setUsedRamGb] = useState<number | null>(null);
+  const [ramCopied, setRamCopied] = useState(false);
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   const [musicApps, setMusicApps] = useState<{ name: string; path: string; added: boolean }[]>([]);
   const [monitorMode, setMonitorMode] = useState<"overlay" | "game">("overlay");
@@ -191,6 +196,12 @@ export default function App() {
   useEffect(() => {
     if (busy || tab !== "apps") return;
     invoke<ProcGroup[]>("list_processes").then(setProcs).catch(() => {});
+    invoke<{ ram_total_gb: number; ram_used_gb: number }>("get_metrics")
+      .then((m) => {
+        setMachineRamGb(m.ram_total_gb > 0 ? m.ram_total_gb : null);
+        setUsedRamGb(m.ram_used_gb > 0 ? m.ram_used_gb : null);
+      })
+      .catch(() => {});
   }, [tab, busy]);
 
   useEffect(() => {
@@ -569,6 +580,22 @@ export default function App() {
 
         {tab === "apps" && (
           <section className="space-y-4">
+            <RamBoard
+              procs={procs}
+              machineGb={machineRamGb}
+              usedGb={usedRamGb}
+              copied={ramCopied}
+              onCopy={async () => {
+                const text = ramPrompt(procs, machineRamGb, usedRamGb);
+                try {
+                  await navigator.clipboard.writeText(text);
+                  setRamCopied(true);
+                  window.setTimeout(() => setRamCopied(false), 1600);
+                } catch {
+                  setRamCopied(false);
+                }
+              }}
+            />
             <div>
               <h2 className="font-display text-lg font-semibold text-paper">À garder</h2>
               <p className="mt-1 text-[13px] text-muted">Restent ouvertes en mode jeu.</p>
@@ -971,6 +998,7 @@ export default function App() {
                           ["notch_show_ram", "RAM", config.overlay.notch_show_ram !== false],
                           ["notch_show_cpu", "CPU", config.overlay.notch_show_cpu !== false],
                           ["notch_show_media", "Lecture", config.overlay.notch_show_media !== false],
+                          ["notch_show_mascot", "Avatar", config.overlay.notch_show_mascot !== false],
                         ] as const
                       ).map(([key, label, on]) => (
                         <button
@@ -1384,6 +1412,137 @@ function OptionRow({
         <p className="mt-1 text-[13px] leading-relaxed text-muted">{hint}</p>
       </div>
       <Switch checked={checked} onCheckedChange={onChange} className="mt-0.5 shrink-0" />
+    </div>
+  );
+}
+
+function formatRam(mb: number) {
+  if (mb >= 1024) {
+    const go = mb / 1024;
+    return `${go.toFixed(go >= 10 ? 0 : 1).replace(".", ",")} Go`;
+  }
+  return `${mb} Mo`;
+}
+
+function ramPrompt(apps: ProcGroup[], machineGb: number | null, usedGb: number | null) {
+  const ranked = apps
+    .filter((p) => !p.protected)
+    .sort((a, b) => b.memory_mb - a.memory_mb);
+  const sum = ranked.reduce((s, p) => s + p.memory_mb, 0);
+  const lines = ranked.map((p) => {
+    const flags = [
+      p.kept ? "gardée en mode jeu" : "peut être fermée",
+      p.foreground ? "au premier plan" : "en fond",
+      p.instances > 1 ? `${p.instances} processus` : "1 processus",
+    ].join(", ");
+    return `- ${p.name} | ${p.memory_mb} Mo | CPU ${Math.round(p.cpu_pct)}% | ${flags}${p.path ? ` | ${p.path}` : ""}`;
+  });
+  const machine = machineGb ? `${machineGb.toFixed(1).replace(".", ",")} Go installés` : "taille inconnue";
+  const used = usedGb ? `${usedGb.toFixed(1).replace(".", ",")} Go utilisés au total` : "usage total inconnu";
+  return `Tu analyses la RAM d'un PC Windows utilisé pour jouer. Les applications ci-dessous sont OUVERTES maintenant. Ce n'est pas la liste des logiciels installés.
+
+But : réduire la mémoire prise par ces apps ouvertes. Dis ce que je peux fermer, régler, ou désinstaller, sans casser Windows, Steam, Epic, les pilotes, les anti-cheat ni les jeux.
+
+Pour chaque app, une seule action : Fermer maintenant, Régler, Désinstaller, ou Garder.
+Pour Régler, donne le geste concret (onglets, démarrage, accélération matérielle, instances).
+Ensuite, 5 actions classées de la plus utile à la moins utile.
+
+Réponds en français. Tableau : Nom | Action | Mo récupérables | Pourquoi.
+
+Machine : ${machine}, ${used}. Somme des apps listées : ${sum} Mo.
+
+Apps ouvertes (${ranked.length}) :
+${lines.join("\n")}`;
+}
+
+function RamBoard({
+  procs,
+  machineGb,
+  usedGb,
+  copied,
+  onCopy,
+}: {
+  procs: ProcGroup[];
+  machineGb: number | null;
+  usedGb: number | null;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  const ranked = [...procs]
+    .filter((p) => !p.protected)
+    .sort((a, b) => b.memory_mb - a.memory_mb);
+  const top = ranked[0];
+  const sum = ranked.reduce((total, p) => total + p.memory_mb, 0);
+  const machineMb = machineGb && machineGb > 0 ? machineGb * 1024 : null;
+  const shown = ranked.slice(0, 6);
+  const share = (mb: number) => (machineMb ? Math.round((mb / machineMb) * 100) : null);
+
+  return (
+    <div className="rounded-2xl border border-line bg-surface/70 p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">Mémoire vive</p>
+          {top ? (
+            <>
+              <p className="mt-2 truncate font-display text-[28px] font-semibold leading-none tracking-tight text-paper">
+                {top.name}
+              </p>
+              <p className="mt-2 font-mono text-[42px] font-semibold leading-none tabular-nums text-brass">
+                {formatRam(top.memory_mb)}
+              </p>
+              <p className="mt-2 text-[13px] text-muted">
+                {formatRam(sum)} dans les apps
+                {machineMb ? ` · ${share(sum)}% de ${formatRam(Math.round(machineMb))}` : ""}
+                {usedGb ? ` · ${formatRam(Math.round(usedGb * 1024))} utilisés` : ""}
+              </p>
+            </>
+          ) : (
+            <p className="mt-3 text-[14px] text-muted">Aucune app mesurée pour l’instant.</p>
+          )}
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!top}
+          onClick={onCopy}
+          className="shrink-0"
+        >
+          <ClipboardCopy className="h-3.5 w-3.5" />
+          {copied ? "Copié" : "Copier l'analyse"}
+        </Button>
+      </div>
+      {top && (
+        <ul className="mt-5 space-y-3">
+          {shown.map((p, i) => {
+            const width = Math.max(4, Math.round((p.memory_mb / top.memory_mb) * 100));
+            const pct = share(p.memory_mb);
+            return (
+              <li key={p.key}>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="min-w-0 truncate text-[13px] font-medium text-paper">{p.name}</span>
+                  <span className="shrink-0 font-mono text-[13px] font-semibold tabular-nums text-paper">
+                    {formatRam(p.memory_mb)}
+                    {pct != null && (
+                      <span className="ml-2 font-medium text-muted">{pct === 0 ? "<1" : pct}%</span>
+                    )}
+                  </span>
+                </div>
+                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-ink">
+                  <div
+                    className={cn("h-full rounded-full", i === 0 ? "bg-brass" : "bg-paper/45")}
+                    style={{ width: `${width}%` }}
+                  />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {ranked.length > shown.length && (
+        <p className="mt-3 text-[12px] text-muted">
+          et {ranked.length - shown.length} autre{ranked.length - shown.length > 1 ? "s" : ""}, plus légères
+        </p>
+      )}
     </div>
   );
 }

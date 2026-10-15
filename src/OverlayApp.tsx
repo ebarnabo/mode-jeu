@@ -19,6 +19,7 @@ type OverlayConfig = {
   notch_show_ram?: boolean;
   notch_show_cpu?: boolean;
   notch_show_media?: boolean;
+  notch_show_mascot?: boolean;
   opacity: number;
   interval_ms: number;
   hidden: boolean;
@@ -248,6 +249,7 @@ export default function OverlayApp() {
         : pos.endsWith("right")
           ? "right"
           : "center";
+    const showMascot = cfg.notch_show_mascot !== false;
     const showRam = cfg.notch_show_ram !== false;
     const showCpu = cfg.notch_show_cpu !== false;
     const showMedia = cfg.notch_show_media !== false;
@@ -280,16 +282,26 @@ export default function OverlayApp() {
       return (
         <div className={shell}>
           <div className={pill} style={{ background: `rgba(8, 9, 12, ${Math.max(0.82, opacity)})` }}>
-            <NotchMascot
-              cpu={m?.cpu_pct ?? null}
-              ram={m?.ram_pct ?? null}
-              playing={media.playing}
-              holding={shelf.length > 0}
-              catching={dropHover}
-              track={media.title}
-              compact
-              onClick={() => invoke("set_notch_compact", { compact: false }).catch(() => {})}
-            />
+            {showMascot ? (
+              <NotchMascot
+                cpu={m?.cpu_pct ?? null}
+                ram={m?.ram_pct ?? null}
+                playing={media.playing}
+                holding={shelf.length > 0}
+                catching={dropHover}
+                track={media.title}
+                compact
+                onClick={() => invoke("set_notch_compact", { compact: false }).catch(() => {})}
+              />
+            ) : (
+              <button
+                type="button"
+                className="px-2.5 py-1 text-[11px] font-semibold text-paper"
+                onClick={() => invoke("set_notch_compact", { compact: false }).catch(() => {})}
+              >
+                Agrandir
+              </button>
+            )}
           </div>
         </div>
       );
@@ -299,16 +311,18 @@ export default function OverlayApp() {
       <div className={shell}>
         <div className={pill} style={{ background: `rgba(8, 9, 12, ${Math.max(0.82, opacity)})` }}>
           <div className="flex items-center gap-2">
-            <NotchMascot
-              cpu={m?.cpu_pct ?? null}
-              ram={m?.ram_pct ?? null}
-              playing={media.playing}
-              holding={shelf.length > 0}
-              catching={dropHover}
-              track={media.title}
-              onClick={() => run("app", "open_main")}
-            />
-            {(showRam || showCpu || showMedia) && <span className="h-4 w-px bg-white/10" />}
+            {showMascot && (
+              <NotchMascot
+                cpu={m?.cpu_pct ?? null}
+                ram={m?.ram_pct ?? null}
+                playing={media.playing}
+                holding={shelf.length > 0}
+                catching={dropHover}
+                track={media.title}
+                onClick={() => run("app", "open_main")}
+              />
+            )}
+            {showMascot && (showRam || showCpu || showMedia) && <span className="h-4 w-px bg-white/10" />}
             {showRam && (
               <span className="font-mono text-[11px] font-semibold tabular-nums text-paper">
                 {m ? pair(m.ram_used_gb, m.ram_total_gb, 1) : "—"}

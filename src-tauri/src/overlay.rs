@@ -61,6 +61,9 @@ pub struct OverlayConfig {
     pub notch_show_cpu: bool,
     #[serde(default = "default_true")]
     pub notch_show_media: bool,
+    /// Visage de la notch. Off : aucune mascotte, même en mode réduit.
+    #[serde(default = "default_true")]
+    pub notch_show_mascot: bool,
     #[serde(default = "default_opacity")]
     pub opacity: u8,
     #[serde(default = "default_position")]
@@ -92,6 +95,7 @@ impl Default for OverlayConfig {
             notch_show_ram: true,
             notch_show_cpu: true,
             notch_show_media: true,
+            notch_show_mascot: true,
             opacity: 88,
             position: "top-right".into(),
             interval_ms: 3000,
@@ -411,7 +415,7 @@ fn notch_size(cfg: &OverlayConfig, scale: f64) -> (u32, u32) {
     let shelf = crate::shelf::expanded();
     let music = music_row();
     let extra = !cfg.notch_compact && (shelf || music);
-    let mut logical: f64 = 132.0;
+    let mut logical: f64 = if cfg.notch_show_mascot { 132.0 } else { 96.0 };
     if cfg.notch_show_ram {
         logical += 96.0;
     }
@@ -425,10 +429,10 @@ fn notch_size(cfg: &OverlayConfig, scale: f64) -> (u32, u32) {
         logical = logical.max(560.0);
     }
     if cfg.notch_compact {
-        logical = 52.0;
+        logical = if cfg.notch_show_mascot { 52.0 } else { 92.0 };
     }
     let height = if cfg.notch_compact {
-        44.0
+        if cfg.notch_show_mascot { 44.0 } else { 36.0 }
     } else if shelf && music {
         148.0
     } else if extra {

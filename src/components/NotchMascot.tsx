@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
-const CALM_L =
-  "M26.2 28.4C23.4 20.8 15.2 14.2 12.4 20.4C9.2 26.8 12.4 36 19.6 35.6C22.8 35.4 25.2 31.6 26.2 28.4Z";
-const CALM_R =
-  "M22.8 27.2C25.2 22.4 30.4 15.2 35 16.2C40.4 17.4 40.6 25.8 35.6 28.6C31.8 30.8 26.2 30.4 22.8 27.2Z";
+const BODY_L =
+  "M20.2 28.2C15.4 26.6 10.6 29.6 11 34.4C11.4 39.2 16.6 41.2 21.4 38.6C24.2 37 24.8 32.4 23.2 29.8C22.4 28.6 21.4 28.2 20.2 28.2Z";
+const BODY_R =
+  "M27.6 27.6C32.6 25.8 38.4 28.6 37.8 33.8C37.2 39 32 41.2 27.2 38.4C24.4 36.8 23.8 32.2 25.4 29.4C26.2 28.2 26.8 27.8 27.6 27.6Z";
 
 type Mood = "calm" | "music" | "warn" | "hot" | "catch" | "hold";
 
@@ -78,18 +78,18 @@ export function NotchMascot({
         <svg viewBox="0 0 48 48" aria-hidden="true">
           <circle className="mascot__disc" cx="24" cy="24" r="21.2" />
           <g className="mascot__glyph">
-            <path className="mascot__l" d={CALM_L} />
-            <path className="mascot__r" d={CALM_R} />
+            <path className="mascot__l" d={BODY_L} />
+            <path className="mascot__r" d={BODY_R} />
           </g>
           <g className="mascot__eyes">
             <g className="mascot__look">
               <g className="mascot__eye mascot__eye--l">
-                <ellipse className="mascot__sclera" cx="17.4" cy="16.1" rx="3.15" ry="3.45" />
-                <circle className="mascot__pupil" cx="17.9" cy="16.6" r="1.32" />
+                <ellipse className="mascot__sclera" cx="15.4" cy="16.6" rx="3.85" ry="4.2" />
+                <circle className="mascot__pupil" cx="15.8" cy="17.15" r="1.55" />
               </g>
               <g className="mascot__eye mascot__eye--r">
-                <ellipse className="mascot__sclera" cx="29.7" cy="15.4" rx="2.95" ry="3.2" />
-                <circle className="mascot__pupil" cx="30.15" cy="15.9" r="1.24" />
+                <ellipse className="mascot__sclera" cx="32.6" cy="16.6" rx="3.85" ry="4.2" />
+                <circle className="mascot__pupil" cx="33" cy="17.15" r="1.55" />
               </g>
             </g>
           </g>
