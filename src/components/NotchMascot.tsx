@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 const CALM_L =
@@ -49,9 +49,14 @@ export function NotchMascot({
             : "calm";
 
   const [shifting, setShifting] = useState(false);
+  const mounted = useRef(false);
   useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
     setShifting(true);
-    const t = window.setTimeout(() => setShifting(false), 340);
+    const t = window.setTimeout(() => setShifting(false), 280);
     return () => window.clearTimeout(t);
   }, [mood, playing ? track : ""]);
 
@@ -63,8 +68,8 @@ export function NotchMascot({
       className={cn("mascot", shifting && "is-shifting")}
       data-mood={mood}
       data-playing={playing ? "1" : "0"}
-      title={`${label} · Ouvrir Mode Jeu`}
-      aria-label={`${label}. Ouvrir Mode Jeu`}
+      title={`Ouvrir Mode Jeu · ${label}`}
+      aria-label={`Ouvrir Mode Jeu. ${label}.`}
       onClick={onClick}
     >
       <span className="mascot__spin">

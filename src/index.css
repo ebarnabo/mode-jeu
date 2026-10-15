@@ -154,6 +154,7 @@
 .overlay-notch--bottom-left { transform-origin: bottom left; }
 .overlay-notch--bottom-right { transform-origin: bottom right; }
 .overlay-notch--roomy { transform: none; }
+.overlay-notch :focus-visible { border-radius: 999px; }
 
 @media (hover: hover) and (pointer: fine) {
   .overlay-notch:hover {
@@ -178,23 +179,31 @@
   place-items: center;
   padding: 0;
   border: 0;
+  border-radius: 999px;
   background: none;
   cursor: pointer;
+  transition: transform 180ms cubic-bezier(.22, 1, .36, 1);
 }
 .mascot svg { display: block; width: 24px; height: 24px; }
+.mascot:focus-visible {
+  border-radius: 999px;
+  outline: none;
+  box-shadow: 0 0 0 2px #0e0f12, 0 0 0 4px #d6a64a;
+}
+.mascot:active { transform: scale(0.94); }
 .mascot__spin {
   display: grid;
   transition: transform 420ms cubic-bezier(.22, 1, .36, 1), filter 160ms linear;
 }
 .mascot.is-shifting .mascot__spin { filter: blur(0.55px); }
 .mascot__disc {
-  fill: #0c0d10;
-  stroke: rgba(242, 243, 245, .42);
+  fill: #0e0f12;
+  stroke: rgba(242, 243, 245, 0.62);
   stroke-width: 1.6;
   transition: stroke 280ms ease;
 }
 .mascot__l, .mascot__r {
-  fill: #f4f1ea;
+  fill: #f2f3f5;
   transition: d 520ms cubic-bezier(.22, 1, .36, 1);
 }
 .mascot__glyph {
@@ -204,14 +213,18 @@
 
 .mascot[data-mood="calm"] .mascot__l { animation: mascot-l-idle 5.6s ease-in-out infinite; }
 .mascot[data-mood="calm"] .mascot__r { animation: mascot-r-idle 5.6s ease-in-out infinite; }
-.mascot[data-mood="hold"] .mascot__l { animation: mascot-l-idle 4.2s ease-in-out infinite; }
-.mascot[data-mood="hold"] .mascot__r { animation: mascot-r-idle 4.2s ease-in-out infinite; }
-.mascot[data-mood="hold"] .mascot__glyph { animation: mascot-tilt 4.2s ease-in-out infinite; }
+.mascot[data-mood="hold"] .mascot__l {
+  d: path("M26.6 28.2C23.2 19.6 14.6 13.4 11.8 19.8C8.6 26.6 12.2 36.4 20 35.8C23 35.6 25.6 31.4 26.6 28.2Z");
+  animation: none;
+}
+.mascot[data-mood="hold"] .mascot__r {
+  d: path("M22.4 26.8C25.2 21.4 30.8 14.6 35.4 15.8C40.8 17.2 41 26.2 36 29C32.2 31.2 26 30.8 22.4 26.8Z");
+  animation: none;
+}
 
 .mascot[data-mood="music"] .mascot__disc { stroke: #d6a64a; }
 .mascot[data-mood="music"] .mascot__l { animation: mascot-l-beat 1.15s cubic-bezier(.45, .05, .2, 1) infinite; }
 .mascot[data-mood="music"] .mascot__r { animation: mascot-r-beat 1.15s cubic-bezier(.45, .05, .2, 1) infinite; }
-.mascot[data-mood="music"] .mascot__glyph { animation: mascot-rock 1.15s ease-in-out infinite; }
 
 .mascot[data-mood="warn"] .mascot__disc { stroke: #d6a64a; }
 .mascot[data-mood="warn"] .mascot__l { animation: mascot-l-squint 2.6s ease-in-out infinite; }
@@ -221,15 +234,18 @@
 .mascot[data-mood="hot"] .mascot__spin { transform: scale(.96, 1.02); }
 .mascot[data-mood="hot"] .mascot__l { animation: mascot-l-hot 0.9s ease-in-out infinite; }
 .mascot[data-mood="hot"] .mascot__r { animation: mascot-r-hot 0.9s ease-in-out infinite; }
-.mascot[data-playing="1"][data-mood="hot"] .mascot__glyph { animation: mascot-rock .85s ease-in-out infinite; }
+.mascot[data-playing="1"][data-mood="hot"] .mascot__l,
+.mascot[data-playing="1"][data-mood="hot"] .mascot__r { animation-duration: 0.72s; }
 
 .mascot[data-mood="catch"] .mascot__disc { stroke: #d6a64a; }
 .mascot[data-mood="catch"] .mascot__l { d: path("M24.2 24.8C21.2 16.4 14.2 13.2 11.8 19.4C9.2 26 13 35.2 19.8 34.2C22.4 33.8 23.8 28.4 24.2 24.8Z"); }
 .mascot[data-mood="catch"] .mascot__r { d: path("M25.2 24.2C28.2 18.4 33.2 14.2 37.4 16C42 18 41.6 26.4 36.4 28.8C32.4 30.6 27.6 28.8 25.2 24.2Z"); }
-.mascot[data-mood="catch"] .mascot__spin { transform: translateY(-1px) scale(1.05); }
+.mascot[data-mood="catch"] .mascot__spin { transform: translateY(-1px) scale(1.04); }
 
-.mascot:hover .mascot__spin { transform: scale(1.08) rotate(-6deg); }
-.mascot:active .mascot__spin { transform: scale(.94, 1.05); }
+@media (hover: hover) and (pointer: fine) {
+  .mascot:hover { transform: scale(1.05); }
+  .mascot:hover:active { transform: scale(0.94); }
+}
 
 @keyframes mascot-l-idle {
   0%, 100% { d: path("M26.2 28.4C23.4 20.8 15.2 14.2 12.4 20.4C9.2 26.8 12.4 36 19.6 35.6C22.8 35.4 25.2 31.6 26.2 28.4Z"); }
@@ -248,26 +264,18 @@
   42% { d: path("M21.8 25.8C25.6 19.4 31.6 12.8 36.8 14.6C42.4 16.4 42.6 26.8 36.8 30.2C32.2 32.8 25.4 31.6 21.8 25.8Z"); }
 }
 @keyframes mascot-l-squint {
-  0%, 100% { d: path("M25.2 27.6C23.2 22.4 16.8 17.6 14.4 22.2C11.8 27 14.2 33.6 19.4 33.2C21.8 33 24.4 30 25.2 27.6Z"); }
-  50% { d: path("M24.8 27.8C23 23.2 17.4 18.8 15 23C12.6 27.2 14.6 32.8 19 32.4C21.2 32.2 24.2 29.6 24.8 27.8Z"); }
+  0%, 100% { d: path("M25.8 28.2C23.2 21.2 15.6 15.4 13 21C10.2 26.8 13 35.2 19.4 34.6C22 34.4 25 31 25.8 28.2Z"); }
+  50% { d: path("M25.4 28.4C23 22 16.2 16.4 13.6 21.6C10.8 27 13.4 34.4 19.2 33.8C21.8 33.6 24.6 30.8 25.4 28.4Z"); }
 }
 @keyframes mascot-r-squint {
-  0%, 100% { d: path("M23.6 27.2C25.2 24 29.2 18.4 33.2 19.2C37.6 20.2 37.8 26.2 34.2 28.2C31.4 29.6 26.4 29.4 23.6 27.2Z"); }
-  50% { d: path("M23.8 27.4C25.2 24.6 28.8 19.4 32.4 20C36.2 20.8 36.4 26 33.4 27.8C31 29.2 26.2 29.2 23.8 27.4Z"); }
+  0%, 100% { d: path("M23.2 27.4C25.4 22.8 30.2 16.2 34.6 17C39.4 18 39.6 26 35.2 28.6C31.8 30.6 26 30.2 23.2 27.4Z"); }
+  50% { d: path("M23.4 27.6C25.4 23.6 29.8 17.4 33.8 18C38.2 18.8 38.4 26.2 34.6 28.4C31.6 30.2 26.2 30 23.4 27.6Z"); }
 }
 @keyframes mascot-l-hot {
-  0%, 100% { d: path("M25.4 28.8C24.2 24.6 17.4 20.4 14.8 24.2C12.2 28 14.6 33.2 19.2 33C21.6 32.9 24.6 30.6 25.4 28.8Z"); }
-  50% { d: path("M25 29.2C24 25.4 18 22 15.6 25.2C13.2 28.4 15.2 32.4 19 32.2C21.2 32.1 24.4 30.6 25 29.2Z"); }
+  0%, 100% { d: path("M25.6 28.6C23.2 22.2 16.4 16.8 13.8 22C11.2 27.2 13.8 34.2 19.2 33.6C21.8 33.4 24.8 30.8 25.6 28.6Z"); }
+  50% { d: path("M25.4 29C23.4 23.4 17 18.2 14.4 23C11.8 27.8 14.2 33.6 19 33.2C21.6 33 24.6 31 25.4 29Z"); }
 }
 @keyframes mascot-r-hot {
-  0%, 100% { d: path("M23.4 28.2C25.4 26.2 30.2 21.6 33.6 22.4C37.2 23.2 37 27.6 34 29C31.4 30 26.2 30.2 23.4 28.2Z"); }
-  50% { d: path("M23.6 28.6C25.2 27 29.4 23.2 32.6 23.8C36 24.4 35.8 28 33.2 29.2C31 30 26.4 30.4 23.6 28.6Z"); }
-}
-@keyframes mascot-rock {
-  0%, 100% { transform: rotate(-4deg); }
-  50% { transform: rotate(4deg); }
-}
-@keyframes mascot-tilt {
-  0%, 100% { transform: rotate(-2deg); }
-  50% { transform: rotate(2deg); }
+  0%, 100% { d: path("M23.4 27.8C25.4 24 30 18 34 18.6C38.4 19.4 38.4 26.4 34.4 28.4C31.4 30 26.2 30 23.4 27.8Z"); }
+  50% { d: path("M23.6 28.2C25.4 25 30.2 19.6 33.6 20.2C37.4 20.8 37.2 26.8 34 28.6C31.4 30 26.4 30.2 23.6 28.2Z"); }
 }
