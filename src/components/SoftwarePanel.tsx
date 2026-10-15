@@ -40,7 +40,7 @@ type AnalyzeReport = {
 type View = "disks" | "installed" | "open";
 
 export function SoftwarePanel() {
-  const [view, setView] = useState<View | null>(null);
+  const [view, setView] = useState<View>("disks");
   const [apps, setApps] = useState<InstalledApp[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -118,7 +118,7 @@ export function SoftwarePanel() {
       <div>
         <h2 className="font-display text-lg font-semibold text-paper">PC</h2>
         <p className="mt-1 max-w-[48ch] text-[13px] leading-relaxed text-muted">
-          Rien ne tourne tant que tu n’as pas choisi une action.
+          Disques et état SMART dès l’ouverture. Logiciels et classer seulement si tu les lances.
         </p>
       </div>
 
@@ -145,12 +145,6 @@ export function SoftwarePanel() {
           </button>
         ))}
       </div>
-
-      {view === null && (
-        <p className="px-1 text-[13px] text-muted">
-          Disques : santé SMART. Logiciels : désinstall propre. Classer : utile / à retirer / intouchable.
-        </p>
-      )}
 
       {error && (
         <p className="rounded-xl border border-[#E8A07A]/30 bg-[#E8A07A]/10 px-4 py-3 text-[13px] text-[#E8A07A]">

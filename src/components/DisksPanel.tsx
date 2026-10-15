@@ -1,6 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Loader2, Sparkles, Wrench } from "lucide-react";
+import { HardDrive, Loader2, Sparkles, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -45,14 +45,12 @@ type DiskJob = {
 
 export function DisksPanel() {
   const [disks, setDisks] = useState<PhysicalDisk[]>([]);
-  const [started, setStarted] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [log, setLog] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    setStarted(true);
     setLoading(true);
     setError(null);
     try {
@@ -63,6 +61,10 @@ export function DisksPanel() {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   const runJob = async (cmd: "optimize_volume" | "improve_volume" | "analyze_fragmentation", letter: string) => {
     setBusy(`${cmd}:${letter}`);
@@ -78,19 +80,6 @@ export function DisksPanel() {
       setBusy(null);
     }
   };
-
-  if (!started) {
-    return (
-      <div className="rounded-2xl border border-dashed border-line px-5 py-10 text-center">
-        <p className="text-[13px] text-muted">
-          Température, usure, spare. Aucune lecture tant que tu n’as pas demandé.
-        </p>
-        <Button className="mt-5" onClick={() => void refresh()}>
-          Lire la santé
-        </Button>
-      </div>
-    );
-  }
 
   if (loading && disks.length === 0) {
     return (
@@ -125,13 +114,16 @@ export function DisksPanel() {
         >
           <div className="p-5">
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[12px] text-muted">
-                  {d.kind} · {d.bus} · {d.source}
-                </p>
-                <h3 className="mt-1 truncate font-display text-[20px] font-semibold tracking-tight text-paper">
-                  {d.model}
-                </h3>
+              <div className="flex min-w-0 items-start gap-3">
+                <DiskStatusIcon status={d.status} kind={d.kind} label={d.status_label} />
+                <div className="min-w-0">
+                  <p className="text-[12px] text-muted">
+                    {d.kind} · {d.bus} · {d.source}
+                  </p>
+                  <h3 className="mt-1 truncate font-display text-[20px] font-semibold tracking-tight text-paper">
+                    {d.model}
+                  </h3>
+                </div>
               </div>
               <span
                 className={cn(
@@ -254,6 +246,47 @@ export function DisksPanel() {
         </pre>
       )}
     </div>
+  );
+}
+
+function DiskStatusIcon({
+  status,
+  kind,
+  label,
+}: {
+  status: string;
+  kind: string;
+  label: string;
+}) {
+  const tone =
+    status === "ok"
+      ? "border-jade/35 bg-jade/12 text-jade"
+      : status === "watch"
+        ? "border-brass/35 bg-brass/12 text-brass"
+        : "border-[#E8A07A]/40 bg-[#E8A07A]/12 text-[#E8A07A]";
+  const flash = /ssd|nvme|flash/i.test(kind);
+  return (
+    <span
+      title={`${kind} · ${label}`}
+      className={cn(
+        "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border",
+        tone
+      )}
+    >
+      <HardDrive className="h-5 w-5" strokeWidth={1.75} />
+      <span
+        className={cn(
+          "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface",
+          status === "ok" && "bg-jade",
+          status === "watch" && "bg-brass",
+          (status === "bad" || status === "critical") && "bg-[#E8A07A]",
+          !["ok", "watch", "bad", "critical"].includes(status) && "bg-muted"
+        )}
+      />
+      {flash && (
+        <span className="pointer-events-none absolute inset-x-2 top-1.5 h-px bg-current opacity-30" />
+      )}
+    </span>
   );
 }
 

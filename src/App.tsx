@@ -892,7 +892,7 @@ export default function App() {
             <div className="space-y-4 rounded-2xl border border-line bg-surface/60 p-5">
               <Setting
                 label="Notch (app réduite)"
-                hint="Capsule type Notch Nook en haut d’écran quand Mode Jeu est dans la barre des tâches. Masquée pendant un jeu."
+                hint="Capsule type Notch Nook quand Mode Jeu est dans la barre des tâches. Masquée pendant un jeu."
                 checked={config.overlay.notch !== false}
                 onChange={(v) => patchOverlay({ notch: v })}
               />
@@ -907,6 +907,9 @@ export default function App() {
                           ["top-left", "Haut G"],
                           ["top-center", "Haut C"],
                           ["top-right", "Haut D"],
+                          ["bottom-left", "Bas G"],
+                          ["bottom-center", "Bas C"],
+                          ["bottom-right", "Bas D"],
                         ] as const
                       ).map(([value, label]) => (
                         <button

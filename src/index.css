@@ -145,6 +145,9 @@
 }
 .overlay-notch--left { transform-origin: top left; }
 .overlay-notch--right { transform-origin: top right; }
+.overlay-notch--bottom { transform-origin: bottom center; }
+.overlay-notch--bottom-left { transform-origin: bottom left; }
+.overlay-notch--bottom-right { transform-origin: bottom right; }
 
 @media (hover: hover) and (pointer: fine) {
   .overlay-notch:hover {

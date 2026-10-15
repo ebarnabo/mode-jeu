@@ -287,14 +287,20 @@ fn place_overlay(
         let width = (360.0 * scale).round() as u32;
         let height = (56.0 * scale).round() as u32;
         let inset = (20.0 * scale).round() as i32;
-        let x = match cfg.notch_position.as_str() {
-            "top-left" => mon.x + inset,
-            "top-right" => mon.x + mon.width as i32 - width as i32 - inset,
+        let pos = cfg.notch_position.as_str();
+        let x = match pos {
+            "top-left" | "bottom-left" => mon.x + inset,
+            "top-right" | "bottom-right" => mon.x + mon.width as i32 - width as i32 - inset,
             _ => mon.x + (mon.width as i32 - width as i32) / 2,
+        };
+        let y = if pos.starts_with("bottom") {
+            mon.y + mon.height as i32 - height as i32
+        } else {
+            mon.y
         };
         win.set_size(PhysicalSize::new(width, height))
             .map_err(|e| e.to_string())?;
-        win.set_position(PhysicalPosition::new(x, mon.y))
+        win.set_position(PhysicalPosition::new(x, y))
             .map_err(|e| e.to_string())?;
         return Ok(());
     }

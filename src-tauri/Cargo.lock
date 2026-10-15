@@ -1953,7 +1953,7 @@ dependencies = [
 
 [[package]]
 name = "mode-jeu"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "serde",
  "serde_json",

@@ -139,15 +139,30 @@ export default function OverlayApp() {
   if (notchOn) {
     const m = metrics;
     const pos = cfg.notch_position || "top-center";
+    const bottom = pos.startsWith("bottom");
     const align =
-      pos === "top-left" ? "justify-start" : pos === "top-right" ? "justify-end" : "justify-center";
-    const origin =
-      pos === "top-left" ? "left" : pos === "top-right" ? "right" : "center";
+      pos.endsWith("left")
+        ? "justify-start"
+        : pos.endsWith("right")
+          ? "justify-end"
+          : "justify-center";
+    const origin = bottom
+      ? pos.endsWith("left")
+        ? "bottom-left"
+        : pos.endsWith("right")
+          ? "bottom-right"
+          : "bottom"
+      : pos.endsWith("left")
+        ? "left"
+        : pos.endsWith("right")
+          ? "right"
+          : "center";
 
     return (
       <div
         className={cn(
-          "pointer-events-none flex h-full w-full select-none items-start bg-transparent px-2 pb-2",
+          "pointer-events-none flex h-full w-full select-none bg-transparent px-2",
+          bottom ? "items-end pt-2" : "items-start pb-2",
           align
         )}
       >
@@ -155,9 +170,15 @@ export default function OverlayApp() {
           role="button"
           tabIndex={0}
           className={cn(
-            "overlay-notch pointer-events-auto flex cursor-pointer items-center gap-2.5 rounded-b-[18px] border border-t-0 border-white/10 px-3 py-1.5 shadow-[0_12px_28px_rgba(0,0,0,.4)]",
+            "overlay-notch pointer-events-auto flex cursor-pointer items-center gap-2.5 border-white/10 px-3 py-1.5 shadow-[0_12px_28px_rgba(0,0,0,.4)]",
+            bottom
+              ? "rounded-t-[18px] border border-b-0"
+              : "rounded-b-[18px] border border-t-0",
             origin === "left" && "overlay-notch--left",
-            origin === "right" && "overlay-notch--right"
+            origin === "right" && "overlay-notch--right",
+            origin === "bottom" && "overlay-notch--bottom",
+            origin === "bottom-left" && "overlay-notch--bottom-left",
+            origin === "bottom-right" && "overlay-notch--bottom-right"
           )}
           style={{ background: `rgba(8, 9, 12, ${Math.max(0.82, opacity)})` }}
           onClick={() => run("app", "open_main")}
