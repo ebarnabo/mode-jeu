@@ -152,6 +152,7 @@ type Session = {
   closed: string[];
   closed_names: string[];
   freed_mb: number;
+  closed_use?: { name: string; mb: number; cpu_pct?: number }[];
 };
 
 export default function App() {
@@ -194,7 +195,7 @@ export default function App() {
   }, [refresh]);
 
   useEffect(() => {
-    if (busy || tab !== "apps") return;
+    if (busy || (tab !== "apps" && tab !== "session")) return;
     invoke<ProcGroup[]>("list_processes").then(setProcs).catch(() => {});
     invoke<{ ram_total_gb: number; ram_used_gb: number }>("get_metrics")
       .then((m) => {
@@ -440,6 +441,19 @@ export default function App() {
     });
   }, [procs, query, appSort, appFilter, config]);
 
+  const willClose = useMemo(() => {
+    const minMb = config?.min_close_mb ?? 40;
+    return procs
+      .filter(
+        (p) =>
+          !p.protected &&
+          !p.kept &&
+          !(config?.protect_foreground && p.foreground) &&
+          p.memory_mb >= minMb
+      )
+      .sort((a, b) => b.memory_mb - a.memory_mb);
+  }, [procs, config]);
+
   const toggleSelect = (key: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -544,11 +558,11 @@ export default function App() {
               className={cn(
                 "flex flex-1 items-center justify-center gap-1.5 rounded-xl px-2 py-2.5 text-[12px] font-semibold transition-colors",
                 on
-                  ? "bg-raised text-paper shadow-[inset_0_0_0_1px_rgba(214,166,74,0.28)]"
+                  ? "bg-white/10 text-paper"
                   : "text-muted hover:text-paper"
               )}
             >
-              <Icon className={cn("h-3.5 w-3.5", on ? "text-brass" : "")} />
+              <Icon className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">{label}</span>
             </button>
           );
@@ -557,23 +571,41 @@ export default function App() {
 
       <main className="scroll-area relative z-10 flex-1 overflow-y-auto px-7" style={{ paddingBottom: 132 }}>
         {tab === "session" && (
-          <section>
+          <section className="space-y-4">
             {active ? (
-              session!.closed_names.length > 0 ? (
-                <ul className="space-y-2">
-                  {session!.closed_names.map((name, i) => (
-                    <li key={`${name}-${i}`} className="truncate text-[14px] text-paper">
-                      {name}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-[13px] text-muted">Aucune app mise en pause.</p>
-              )
+              <ActivationBadges
+                title={`${formatRam(session?.freed_mb ?? 0)} libérés`}
+                note="Mesuré à la fermeture. Ce n’est pas un gain d’images."
+                items={(session?.closed_use?.length
+                  ? session.closed_use
+                  : (session?.closed_names ?? []).map((name) => ({ name, mb: 0, cpu_pct: 0 }))
+                ).map((item) => ({
+                  name: item.name,
+                  mb: item.mb,
+                  cpu: item.cpu_pct ?? 0,
+                }))}
+              />
             ) : (
-              <p className="max-w-[42ch] text-[15px] leading-relaxed text-muted">
-                Un bouton. Steam, Discord et Windows restent. Le reste se coupe le temps de jouer.
-              </p>
+              <>
+                <p className="max-w-[42ch] text-[15px] leading-relaxed text-muted">
+                  Un bouton. Steam, Discord et Windows restent. Le reste se coupe le temps de jouer.
+                </p>
+                <ActivationBadges
+                  title={
+                    procs.length === 0
+                      ? "Mesure…"
+                      : willClose.length
+                        ? `${formatRam(willClose.reduce((s, p) => s + p.memory_mb, 0))} occupés`
+                        : "Rien à fermer"
+                  }
+                  note="RAM occupée maintenant par les apps qui seront fermées. Le CPU n’apparaît que s’il a été mesuré."
+                  items={willClose.map((p) => ({
+                    name: p.name,
+                    mb: p.memory_mb,
+                    cpu: p.cpu_pct,
+                  }))}
+                />
+              </>
             )}
           </section>
         )}
@@ -1158,7 +1190,7 @@ export default function App() {
                     max={100}
                     value={config.overlay.opacity}
                     onChange={(e) => patchOverlay({ opacity: Number(e.target.value) })}
-                    className="w-full accent-[#D6A64A]"
+                    className="w-full accent-[#E2B15A]"
                   />
                 </div>
                 <div>
@@ -1192,7 +1224,9 @@ export default function App() {
 
         {tab === "options" && (
           <section className="space-y-4">
-            <p className="text-[13px] text-muted">Appliqués à l’activation, annulés à la sortie.</p>
+          <p className="text-[13px] text-muted">
+            À l’activation, puis annulés à la sortie. Aucun badge n’annonce des images en plus.
+          </p>
             <UpdatesPanel gameMode={active} />
             <div className="flex justify-end">
               <Button size="sm" variant="outline" onClick={applyAmdProfile}>
@@ -1236,7 +1270,8 @@ export default function App() {
               <div className="space-y-0 overflow-hidden rounded-2xl border border-line bg-surface/60">
                 <OptionRow
                   label="Plan Performances élevées"
-                  hint="Active le plan High Performance Windows."
+                  hint="Le plan High Performance de Windows."
+                  badge="plan Windows"
                   checked={config.high_performance}
                   onChange={(v) =>
                     patch({
@@ -1247,7 +1282,9 @@ export default function App() {
                 />
                 <OptionRow
                   label="Plan Ultimate Performance"
-                  hint="Prioritaire si disponible (copie le schéma Windows)."
+                  hint="Utilisé seulement si Windows a ce schéma."
+                  badge="si le schéma existe"
+                  tone="limit"
                   checked={config.ultimate_performance}
                   onChange={(v) =>
                     patch({
@@ -1258,79 +1295,95 @@ export default function App() {
                 />
                 <OptionRow
                   label="Mode Jeu Windows"
-                  hint="Active Game Mode (priorité CPU/GPU au jeu)."
+                  hint="Le réglage Game Mode, pas un compteur d’images."
+                  badge="réglage Windows"
                   checked={config.enable_game_mode}
                   onChange={(v) => patch({ enable_game_mode: v })}
                 />
                 <OptionRow
                   label="Couper Game DVR / captures"
-                  hint="Moins d’overhead Xbox Game Bar en arrière-plan."
+                  hint="La barre Xbox n’enregistre plus en fond."
+                  badge="captures off"
                   checked={config.disable_game_dvr}
                   onChange={(v) => patch({ disable_game_dvr: v })}
                 />
                 <OptionRow
                   label="Couper les Widgets"
-                  hint="Masque le panneau Widgets de la barre des tâches."
+                  hint="Le panneau de la barre des tâches."
+                  badge="panneau masqué"
                   checked={config.disable_widgets}
                   onChange={(v) => patch({ disable_widgets: v })}
                 />
                 <OptionRow
                   label="Couper les apps en arrière-plan"
-                  hint="Limite les UWP / apps Store en fond."
+                  hint="Les apps du Store, pas tes jeux."
+                  badge="apps Store"
                   checked={config.disable_background_apps}
                   onChange={(v) => patch({ disable_background_apps: v })}
                 />
                 <OptionRow
                   label="MMCSS gaming"
-                  hint="Plus de CPU/réseau pour le jeu (admin recommandé)."
+                  hint="Priorité CPU et réseau. Les images ne sont pas comptées."
+                  badge="priorité, pas des FPS"
+                  tone="limit"
                   checked={config.mmcss_gaming}
                   onChange={(v) => patch({ mmcss_gaming: v })}
                 />
                 <OptionRow
                   label="CPU à 100 % pendant la session"
-                  hint="Cœurs déparkés, USB sans suspend. Annulé à la sortie."
+                  hint="Plancher des cœurs, USB sans mise en veille."
+                  badge="minimum 100 %"
                   checked={config.cpu_unpark !== false}
                   onChange={(v) => patch({ cpu_unpark: v })}
                 />
                 <OptionRow
                   label="Boost processeur agressif"
-                  hint="Sur secteur : boost au maximum et préférence énergie à fond. Utile quand le CPU limite la carte. Restauré à la sortie."
+                  hint="Sur secteur, ça tient le plafond déjà atteint. Ça ne le relève pas."
+                  badge="plafond tenu"
+                  tone="limit"
                   checked={config.cpu_boost !== false}
                   onChange={(v) => patch({ cpu_boost: v })}
                 />
                 <OptionRow
                   label="Focus assist"
-                  hint="Alarmes seulement pendant la session, puis retour à l’état précédent."
+                  hint="Alarmes seulement, puis retour à l’état d’avant."
+                  badge="alarmes seules"
                   checked={config.focus_assist !== false}
                   onChange={(v) => patch({ focus_assist: v })}
                 />
                 <OptionRow
                   label="GPU haute performance"
-                  hint="Pour les jeux connus. Avec une seule carte, Windows l’utilise déjà."
+                  hint="Utile avec deux cartes. Avec une seule, Windows l’utilise déjà."
+                  badge="rien à 1 GPU"
+                  tone="limit"
                   checked={config.gpu_high_perf !== false}
                   onChange={(v) => patch({ gpu_high_perf: v })}
                 />
                 <OptionRow
                   label="Couper les notifications toast"
-                  hint="Évite les pop-ups pendant la session."
+                  hint="Plus de pop-up pendant la session."
+                  badge="pop-ups off"
                   checked={config.disable_notifications}
                   onChange={(v) => patch({ disable_notifications: v })}
                 />
                 <OptionRow
                   label="Effets visuels → performances"
-                  hint="Désactive animations / ombres Windows."
+                  hint="Animations et ombres de Windows."
+                  badge="animations off"
                   checked={config.visual_effects_perf}
                   onChange={(v) => patch({ visual_effects_perf: v })}
                 />
                 <OptionRow
                   label="Désactiver la transparence"
-                  hint="Aero / acrylique off le temps de la session."
+                  hint="Acrylique coupé le temps de la session."
+                  badge="acrylique off"
                   checked={config.disable_transparency}
                   onChange={(v) => patch({ disable_transparency: v })}
                 />
                 <OptionRow
                   label={`Services (${config.services.join(", ")})`}
-                  hint="SysMain, WSearch, DiagTrack — admin recommandé."
+                  hint="Ils s’arrêtent vraiment, puis repartent."
+                  badge="arrêt puis retour"
                   checked={config.stop_services}
                   onChange={(v) => patch({ stop_services: v })}
                   last
@@ -1355,7 +1408,7 @@ export default function App() {
                   step={10}
                   value={config.min_close_mb ?? 40}
                   onChange={(e) => patch({ min_close_mb: Number(e.target.value) })}
-                  className="mt-3 w-full accent-[#D6A64A]"
+                  className="mt-3 w-full accent-[#E2B15A]"
                 />
               </div>
             </div>
@@ -1365,6 +1418,17 @@ export default function App() {
 
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 h-36 bg-gradient-to-t from-ink via-ink/90 to-transparent" />
       <div className="absolute inset-x-0 bottom-0 z-30 px-7 pb-7">
+        {!busy && (
+          <p className="mb-2 text-center font-mono text-[12px] tabular-nums text-muted">
+            {active
+              ? `${formatRam(session?.freed_mb ?? 0)} libérés à la fermeture`
+              : procs.length === 0
+                ? "Mesure de la RAM…"
+                : willClose.length
+                ? `${formatRam(willClose.reduce((s, p) => s + p.memory_mb, 0))} occupés · ${willClose.length} apps`
+                : "Aucune app au-dessus du seuil"}
+          </p>
+        )}
         <Button
           size="lg"
           variant={active ? "outline" : "primary"}
@@ -1393,25 +1457,90 @@ function OptionRow({
   checked,
   onChange,
   last,
+  badge,
+  tone = "fact",
 }: {
   label: string;
   hint: string;
   checked: boolean;
   onChange: (v: boolean) => void;
   last?: boolean;
+  badge?: string;
+  tone?: "fact" | "limit";
 }) {
   return (
     <div
       className={cn(
-        "flex items-start justify-between gap-6 px-5 py-4",
+        "flex items-start justify-between gap-4 px-5 py-4",
         !last && "border-b border-line/80"
       )}
     >
       <div className="min-w-0">
-        <p className="text-sm font-medium text-paper">{label}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm font-medium text-paper">{label}</p>
+          {badge && (
+            <span
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                tone === "limit"
+                  ? "border-line text-muted"
+                  : "border-white/15 bg-white/5 text-paper"
+              )}
+            >
+              {badge}
+            </span>
+          )}
+        </div>
         <p className="mt-1 text-[13px] leading-relaxed text-muted">{hint}</p>
       </div>
       <Switch checked={checked} onCheckedChange={onChange} className="mt-0.5 shrink-0" />
+    </div>
+  );
+}
+
+function ActivationBadges({
+  title,
+  note,
+  items,
+}: {
+  title: string;
+  note: string;
+  items: { name: string; mb: number; cpu: number }[];
+}) {
+  const shown = items.slice(0, 8);
+  return (
+    <div className="space-y-3">
+      <p
+        className={cn(
+          "font-mono text-[28px] font-semibold leading-none tabular-nums",
+          items.length ? "text-jade" : "text-paper"
+        )}
+      >
+        {title}
+      </p>
+      {shown.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {shown.map((item, i) => (
+            <span
+              key={`${item.name}-${i}`}
+              className="inline-flex items-center gap-1.5 rounded-full border border-line bg-raised px-2.5 py-1 text-[12px] text-paper"
+            >
+              <span className="max-w-[16ch] truncate">{item.name}</span>
+              {item.mb > 0 && (
+                <span className="font-mono tabular-nums text-paper/80">{formatRam(item.mb)}</span>
+              )}
+              {item.cpu >= 1 && (
+                <span className="font-mono tabular-nums text-muted">{Math.round(item.cpu)} % CPU</span>
+              )}
+            </span>
+          ))}
+          {items.length > shown.length && (
+            <span className="rounded-full px-2 py-1 text-[12px] text-muted">
+              +{items.length - shown.length}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1481,10 +1610,9 @@ function RamBoard({
     <div className="rounded-2xl border border-line bg-surface/70 p-5">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted">Mémoire vive</p>
           {top ? (
             <>
-              <p className="mt-2 truncate font-display text-[28px] font-semibold leading-none tracking-tight text-paper">
+              <p className="truncate font-display text-[28px] font-semibold leading-none tracking-tight text-paper">
                 {top.name}
               </p>
               <p className="mt-2 font-mono text-[42px] font-semibold leading-none tabular-nums text-brass">

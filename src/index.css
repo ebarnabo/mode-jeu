@@ -51,13 +51,13 @@
   body {
     @apply bg-ink text-paper font-sans;
     font-feature-settings: "ss01";
-    caret-color: #d6a64a;
+    caret-color: #e2b15a;
     user-select: none;
     overflow: hidden;
   }
   ::selection {
-    background: rgba(214, 166, 74, 0.35);
-    color: #f4f1ea;
+    background: rgba(226, 177, 90, 0.28);
+    color: #f4f4f5;
   }
   a {
     text-underline-offset: 0.18em;
@@ -72,18 +72,16 @@
 
 @layer components {
   .app-shell {
-    background:
-      radial-gradient(900px 380px at 8% -18%, rgba(214, 166, 74, 0.07), transparent 58%),
-      #0e0f12;
+    background: #09090b;
   }
 
   /* —— Ignition Mode Jeu (signature motion) —— */
   .power-ignition__veil {
     background: radial-gradient(
       80% 60% at 50% 40%,
-      rgba(214, 166, 74, 0.22),
-      rgba(14, 15, 18, 0.92) 55%,
-      rgba(14, 15, 18, 0.97)
+      rgba(226, 177, 90, 0.22),
+      rgba(9, 9, 11, 0.92) 55%,
+      rgba(9, 9, 11, 0.97)
     );
     animation: power-veil 1.55s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
@@ -92,8 +90,8 @@
     border-radius: 50%;
     background: radial-gradient(
       circle,
-      rgba(214, 166, 74, 0.55) 0%,
-      rgba(214, 166, 74, 0.12) 28%,
+      rgba(226, 177, 90, 0.55) 0%,
+      rgba(226, 177, 90, 0.12) 28%,
       transparent 62%
     );
     animation: power-burst 1.1s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -101,10 +99,10 @@
 
   .power-ignition__ring {
     border-radius: 50%;
-    border: 1.5px solid rgba(214, 166, 74, 0.55);
+    border: 1.5px solid rgba(226, 177, 90, 0.55);
     box-shadow:
-      0 0 0 1px rgba(214, 166, 74, 0.12),
-      0 0 40px rgba(214, 166, 74, 0.25);
+      0 0 0 1px rgba(226, 177, 90, 0.12),
+      0 0 40px rgba(226, 177, 90, 0.25);
     animation: power-ring 1.15s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
@@ -132,8 +130,8 @@
     width: 4px;
     height: 4px;
     border-radius: 999px;
-    background: #d6a64a;
-    box-shadow: 0 0 10px rgba(214, 166, 74, 0.9);
+    background: #e2b15a;
+    box-shadow: 0 0 8px rgba(226, 177, 90, 0.55);
     opacity: 0;
     animation: power-spark 0.95s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
@@ -240,7 +238,7 @@ html[data-quiet="1"] *::after {
 .mascot:focus-visible {
   border-radius: 999px;
   outline: none;
-  box-shadow: 0 0 0 2px #0e0f12, 0 0 0 4px #d6a64a;
+  box-shadow: 0 0 0 2px #09090b, 0 0 0 4px #e2b15a;
 }
 .mascot:active { transform: scale(0.94); }
 .mascot__spin {
@@ -249,7 +247,7 @@ html[data-quiet="1"] *::after {
 }
 .mascot.is-shifting .mascot__spin { filter: blur(0.55px); }
 .mascot__disc {
-  fill: #0e0f12;
+  fill: #09090b;
   stroke: rgba(242, 243, 245, 0.62);
   stroke-width: 1.6;
   transition: stroke 280ms ease;
@@ -269,7 +267,7 @@ html[data-quiet="1"] *::after {
 .mascot__l, .mascot__r { fill: #f2f3f5; }
 .mascot[data-mood="music"] .mascot__disc,
 .mascot[data-mood="warn"] .mascot__disc,
-.mascot[data-mood="catch"] .mascot__disc { stroke: #d6a64a; }
+.mascot[data-mood="catch"] .mascot__disc { stroke: #e2b15a; }
 .mascot[data-mood="hot"] .mascot__disc { stroke: #e8a07a; }
 
 @media (hover: hover) and (pointer: fine) {

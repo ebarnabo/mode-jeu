@@ -5,13 +5,13 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: "#0E0F12",
-        surface: "#16181D",
-        raised: "#1D2027",
-        line: "#272B34",
-        muted: "#8A8F9A",
-        paper: "#F2F3F5",
-        brass: "#D6A64A",
+        ink: "#09090B",
+        surface: "#121214",
+        raised: "#1C1C1F",
+        line: "#2A2A2E",
+        muted: "#A1A1AA",
+        paper: "#F4F4F5",
+        brass: "#E2B15A",
         jade: "#5FB98C",
       },
       fontFamily: {

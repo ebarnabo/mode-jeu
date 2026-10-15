@@ -78,7 +78,7 @@ export function MonitorPicker({
                   height={Math.max(4, h - 1.2)}
                   rx={1.4}
                   fill={selected ? "rgba(214,166,74,0.28)" : "#1D2027"}
-                  stroke={selected ? "#D6A64A" : "#272B34"}
+                  stroke={selected ? "#E2B15A" : "#2A2A2E"}
                   strokeWidth={0.35}
                 />
                 <text

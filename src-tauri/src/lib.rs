@@ -221,12 +221,23 @@ impl Default for Config {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct ClosedUse {
+    pub name: String,
+    pub mb: u64,
+    #[serde(default)]
+    pub cpu_pct: f32,
+}
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Session {
     pub active: bool,
     pub closed: Vec<String>,
     pub closed_names: Vec<String>,
     pub freed_mb: u64,
+    /// RAM (et CPU s’il a été mesuré) de chaque app réellement fermée.
+    #[serde(default)]
+    pub closed_use: Vec<ClosedUse>,
     pub previous_plan: Option<String>,
     pub stopped_services: Vec<String>,
     #[serde(default)]
@@ -408,7 +419,10 @@ fn with_proc_sys<R>(f: impl FnOnce(&mut System) -> R) -> R {
 
 fn scan(cfg: &Config, with_cpu: bool) -> Vec<ProcGroup> {
     with_proc_sys(|sys| {
-        // CPU% seulement sur l'onglet Apps ; à l'activation on n'a besoin que de la RAM.
+        if with_cpu {
+            sys.refresh_processes(ProcessesToUpdate::All, true);
+            std::thread::sleep(Duration::from_millis(180));
+        }
         sys.refresh_processes(ProcessesToUpdate::All, with_cpu);
 
         let fg = foreground_pid();
@@ -480,7 +494,7 @@ fn list_processes_cached(cfg: &Config) -> Vec<ProcGroup> {
             }
         }
     }
-    let groups = scan(cfg, false);
+    let groups = scan(cfg, true);
     if let Ok(mut guard) = PROC_CACHE.lock() {
         *guard = Some(ProcCache {
             at: Instant::now(),
@@ -750,6 +764,11 @@ fn activate(app: AppHandle) -> Result<Session, String> {
             if killed {
                 session.freed_mb += g.memory_mb;
                 session.closed_names.push(g.name.clone());
+                session.closed_use.push(ClosedUse {
+                    name: g.name.clone(),
+                    mb: g.memory_mb,
+                    cpu_pct: g.cpu_pct,
+                });
                 if let Some(path) = &g.path {
                     session.closed.push(path.clone());
                 }
