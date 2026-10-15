@@ -84,12 +84,12 @@ export function NotchMascot({
           <g className="mascot__eyes">
             <g className="mascot__look">
               <g className="mascot__eye mascot__eye--l">
-                <ellipse className="mascot__sclera" cx="17.6" cy="16.2" rx="2.35" ry="2.7" />
-                <circle className="mascot__pupil" cx="18" cy="16.6" r="1.05" />
+                <ellipse className="mascot__sclera" cx="17.4" cy="16.1" rx="3.15" ry="3.45" />
+                <circle className="mascot__pupil" cx="17.9" cy="16.6" r="1.32" />
               </g>
               <g className="mascot__eye mascot__eye--r">
-                <ellipse className="mascot__sclera" cx="29.4" cy="15.4" rx="2.2" ry="2.55" />
-                <circle className="mascot__pupil" cx="29.8" cy="15.8" r="1" />
+                <ellipse className="mascot__sclera" cx="29.7" cy="15.4" rx="2.95" ry="3.2" />
+                <circle className="mascot__pupil" cx="30.15" cy="15.9" r="1.24" />
               </g>
             </g>
           </g>
