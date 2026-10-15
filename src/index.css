@@ -223,7 +223,7 @@ html[data-quiet="1"] *::after {
   contain-intrinsic-size: auto 72px;
 }
 
-/* Mascotte notch — une boule, morph CSS, flou seulement au changement d’état. */
+/* Mascotte — GSAP seulement pendant un geste, flou bref au changement d’état. */
 .mascot {
   display: grid;
   width: 28px;
@@ -260,108 +260,19 @@ html[data-quiet="1"] *::after {
   stroke-width: 0.4;
 }
 .mascot__pupil { fill: #14161b; }
-.mascot__look {
-  transform-origin: 24px 16.6px;
-  animation: mascot-look 7.2s ease-in-out infinite;
-}
-.mascot__eye {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: mascot-blink 5.6s ease-in-out infinite;
-}
-.mascot__eye--r { animation-delay: 40ms; }
-.mascot[data-mood="calm"] .mascot__look { animation: mascot-saccade 9.6s linear infinite; }
-.mascot[data-mood="calm"] .mascot__eye { animation: mascot-blink-live 9.6s linear infinite; }
-.mascot[data-mood="calm"] .mascot__eye--r { animation-delay: 70ms; }
-.mascot[data-mood="calm"] .mascot__glyph { animation: mascot-breath 6.4s linear infinite; }
-.mascot[data-mood="music"] .mascot__look { animation: mascot-look-music 2.2s ease-in-out infinite; }
-.mascot[data-mood="warn"] .mascot__eye { animation: none; transform: scaleY(0.45); }
-.mascot[data-mood="warn"] .mascot__look { animation: none; transform: translate(0, -0.6px); }
-.mascot[data-mood="hot"] .mascot__look { animation: mascot-dart 0.62s ease-in-out infinite; }
-.mascot[data-mood="hot"] .mascot__eye { animation-duration: 2.4s; }
-.mascot[data-mood="catch"] .mascot__look { animation: none; transform: translate(0, -1.2px); }
-.mascot[data-mood="catch"] .mascot__eye { animation: none; transform: scaleY(1.15); }
-.mascot[data-mood="hold"] .mascot__look { animation: none; transform: translate(0, 1.1px); }
-.mascot[data-mood="hold"] .mascot__eye { animation-duration: 7.5s; }
-.mascot__l, .mascot__r {
-  fill: #f2f3f5;
-  transition: d 520ms cubic-bezier(.22, 1, .36, 1);
-}
+.mascot__look,
+.mascot__eye,
 .mascot__glyph {
   transform-box: fill-box;
   transform-origin: center;
-  transition: transform 420ms cubic-bezier(0.23, 1, 0.32, 1);
 }
-
-.mascot[data-mood="calm"] .mascot__l,
-.mascot[data-mood="calm"] .mascot__r { animation: none; }
-.mascot[data-mood="hold"] .mascot__glyph { transform: translateY(1.2px); }
-
-.mascot[data-mood="music"] .mascot__disc { stroke: #d6a64a; }
-.mascot[data-mood="music"] .mascot__glyph { animation: mascot-beat 1.15s cubic-bezier(0.45, 0.05, 0.2, 1) infinite; }
-
-.mascot[data-mood="warn"] .mascot__disc { stroke: #d6a64a; }
-.mascot[data-mood="warn"] .mascot__glyph { animation: mascot-tense 2.6s cubic-bezier(0.77, 0, 0.175, 1) infinite; }
-
-.mascot[data-mood="hot"] .mascot__disc { stroke: #e8a07a; }
-.mascot[data-mood="hot"] .mascot__spin { transform: scale(0.96, 1.02); }
-.mascot[data-mood="hot"] .mascot__glyph { animation: mascot-tense 0.9s cubic-bezier(0.77, 0, 0.175, 1) infinite; }
-
+.mascot__l, .mascot__r { fill: #f2f3f5; }
+.mascot[data-mood="music"] .mascot__disc,
+.mascot[data-mood="warn"] .mascot__disc,
 .mascot[data-mood="catch"] .mascot__disc { stroke: #d6a64a; }
-.mascot[data-mood="catch"] .mascot__spin { transform: translateY(-1px) scale(1.04); }
+.mascot[data-mood="hot"] .mascot__disc { stroke: #e8a07a; }
 
 @media (hover: hover) and (pointer: fine) {
   .mascot:hover { transform: scale(1.05); }
   .mascot:hover:active { transform: scale(0.94); }
-}
-
-@keyframes mascot-beat {
-  0%, 100% { transform: scale(1); }
-  42% { transform: scale(1.07); }
-}
-@keyframes mascot-tense {
-  0%, 100% { transform: scale(1, 1); }
-  50% { transform: scale(0.96, 0.92); }
-}
-@keyframes mascot-saccade {
-  0%, 22% { transform: translate(0, 0); animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
-  23.6%, 47% { transform: translate(-1.55px, 0.25px); animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
-  48.6%, 69% { transform: translate(1.45px, -0.85px); animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
-  70.6%, 86% { transform: translate(0.2px, 0.95px); animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
-  87.6%, 100% { transform: translate(0, 0); }
-}
-@keyframes mascot-blink-live {
-  0%, 26% { transform: scaleY(1); animation-timing-function: cubic-bezier(0.77, 0, 0.175, 1); }
-  27.2% { transform: scaleY(0.08); animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
-  28.4%, 71% { transform: scaleY(1); animation-timing-function: cubic-bezier(0.77, 0, 0.175, 1); }
-  72.1% { transform: scaleY(0.08); animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
-  73.2%, 74.8% { transform: scaleY(1); animation-timing-function: cubic-bezier(0.77, 0, 0.175, 1); }
-  75.6% { transform: scaleY(0.08); animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
-  76.4%, 100% { transform: scaleY(1); }
-}
-@keyframes mascot-breath {
-  0%, 68% { transform: scale(1); animation-timing-function: cubic-bezier(0.77, 0, 0.175, 1); }
-  78% { transform: scale(1.045); animation-timing-function: cubic-bezier(0.77, 0, 0.175, 1); }
-  92%, 100% { transform: scale(1); }
-}
-@keyframes mascot-look {
-  0%, 100% { transform: translate(0, 0); }
-  28% { transform: translate(0.85px, 0.15px); }
-  52% { transform: translate(-0.9px, 0.1px); }
-  78% { transform: translate(0.2px, -0.25px); }
-}
-@keyframes mascot-look-music {
-  0%, 100% { transform: translate(0, 0); }
-  40% { transform: translate(0.4px, -0.35px); }
-  70% { transform: translate(-0.35px, 0.2px); }
-}
-@keyframes mascot-blink {
-  0%, 46%, 52%, 100% { transform: scaleY(1); }
-  49% { transform: scaleY(0.08); }
-}
-@keyframes mascot-dart {
-  0%, 100% { transform: translate(0, 0); }
-  25% { transform: translate(1.3px, -0.2px); }
-  50% { transform: translate(-1.4px, 0.35px); }
-  75% { transform: translate(0.8px, 0.15px); }
 }
