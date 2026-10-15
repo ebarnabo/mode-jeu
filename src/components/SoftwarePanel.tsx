@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Loader2, Search, Trash2, Lock } from "lucide-react";
+import { Loader2, Search, Trash2, Lock, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DisksPanel } from "@/components/DisksPanel";
@@ -103,11 +103,14 @@ export function SoftwarePanel() {
       setPending(null);
       await refreshInstalled();
     } catch (e) {
-      setError(
+      const msg =
         typeof e === "string"
           ? e
-          : "Le désinstalleur n’a pas démarré. Réessaie, ou lance Mode Jeu en administrateur."
-      );
+          : e && typeof e === "object" && "message" in e
+            ? String((e as { message: unknown }).message)
+            : "Le désinstalleur n’a pas démarré. Réessaie, ou lance Mode Jeu en administrateur.";
+      setError(msg);
+      await refreshInstalled();
     } finally {
       setBusyId(null);
     }
@@ -156,14 +159,25 @@ export function SoftwarePanel() {
 
       {view === "installed" && (
         <>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Nom ou éditeur"
-              className="pl-11"
-            />
+          <div className="flex gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Nom ou éditeur"
+                className="pl-11"
+              />
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={loading}
+              onClick={() => void refreshInstalled()}
+              aria-label="Actualiser"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+            </Button>
           </div>
           <div className="overflow-hidden rounded-2xl border border-line bg-surface/60">
             {loading ? (
@@ -278,16 +292,19 @@ export function SoftwarePanel() {
               {pending.name}
             </h3>
             <p className="mt-3 text-[13px] leading-relaxed text-muted">
-              Windows ouvre le désinstalleur officiel. Confirme dans cette fenêtre-là.
+              {busyId
+                ? "Le désinstalleur officiel est ouvert. Accepte l’UAC s’il apparaît, puis termine la désinstallation. On attend la fin."
+                : "Windows lance le désinstalleur officiel (MSI ou unins000), avec élévation si le logiciel est installé pour tout le PC."}
             </p>
             <div className="mt-6 flex flex-col gap-2">
               <Button disabled={!!busyId} onClick={() => void confirmUninstall()}>
                 {busyId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                Lancer le désinstalleur
+                {busyId ? "Désinstallation en cours…" : "Lancer le désinstalleur"}
               </Button>
               <button
                 type="button"
-                className="py-2 text-[13px] font-semibold text-muted hover:text-paper"
+                className="py-2 text-[13px] font-semibold text-muted hover:text-paper disabled:opacity-40"
+                disabled={!!busyId}
                 onClick={() => setPending(null)}
               >
                 Annuler

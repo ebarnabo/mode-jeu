@@ -2,16 +2,12 @@
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::Path;
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use winreg::enums::*;
 use winreg::RegKey;
 
 use super::ProcGroup;
-
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 
 const UNINSTALL_PATHS: &[(&str, bool)] = &[
     (r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", false),
@@ -227,36 +223,212 @@ fn parse_cmdline(s: &str) -> Option<(String, Vec<String>)> {
     Some((exe, args))
 }
 
+fn guid_like(s: &str) -> bool {
+    let t = s.trim();
+    t.len() >= 38 && t.starts_with('{') && t.ends_with('}')
+}
+
 fn msi_product(uninstall: &str) -> Option<String> {
     let u = uninstall.to_lowercase();
     if !u.contains("msiexec") {
         return None;
     }
-    for part in uninstall.split(|c: char| c == ' ' || c == '"') {
-        let p = part.trim();
-        if p.starts_with('{') && p.ends_with('}') {
+    for part in uninstall.split(|c: char| c == ' ' || c == '"' || c == ',') {
+        let p = part.trim().trim_start_matches("/i").trim_start_matches("/x").trim_start_matches("/I").trim_start_matches("/X");
+        let p = p.trim();
+        if guid_like(p) {
             return Some(p.to_string());
-        }
-        if let Some(rest) = p.strip_prefix("/x") {
-            if rest.starts_with('{') {
-                return Some(rest.to_string());
-            }
-        }
-        if let Some(rest) = p.strip_prefix("/i") {
-            if rest.starts_with('{') {
-                return Some(rest.to_string());
-            }
-        }
-        if let Some(rest) = p.strip_prefix("/X") {
-            if rest.starts_with('{') {
-                return Some(rest.to_string());
-            }
         }
     }
     None
 }
 
+fn join_args(args: &[String]) -> String {
+    args.iter()
+        .map(|a| {
+            if a.is_empty() {
+                "\"\"".into()
+            } else if a.contains(char::is_whitespace) && !a.starts_with('"') {
+                format!("\"{a}\"")
+            } else {
+                a.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Recolle un UninstallString non quoté du type `C:\Program Files\App\unins000.exe /SILENT`.
+fn resolve_command(cmd: &str) -> Result<(String, Vec<String>, Option<String>), String> {
+    let (exe0, args0) = parse_cmdline(cmd).ok_or_else(|| "Commande de désinstallation invalide.".to_string())?;
+    let mut tokens = vec![exe0];
+    tokens.extend(args0);
+
+    let first = tokens[0].clone();
+    let first_l = first.to_lowercase();
+    if first_l.contains("msiexec") {
+        return Ok((
+            r"C:\Windows\System32\msiexec.exe".into(),
+            tokens.into_iter().skip(1).collect(),
+            None,
+        ));
+    }
+
+    let mut acc = String::new();
+    for i in 0..tokens.len() {
+        if i > 0 {
+            acc.push(' ');
+        }
+        acc.push_str(&tokens[i]);
+        let candidate = acc.trim_matches('"').to_string();
+        if Path::new(&candidate).is_file() {
+            let dir = Path::new(&candidate)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned());
+            return Ok((candidate, tokens[i + 1..].to_vec(), dir));
+        }
+    }
+
+    if Path::new(&first).exists() || first_l.ends_with(".exe") {
+        let dir = Path::new(&first)
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_string_lossy().into_owned());
+        return Ok((first, tokens.into_iter().skip(1).collect(), dir));
+    }
+
+    Err("Désinstalleur introuvable sur le disque.".into())
+}
+
+struct UninstallTarget {
+    exe: String,
+    params: String,
+    dir: Option<String>,
+    elevate: bool,
+}
+
+fn target_from_app(app: &InstalledApp) -> Result<UninstallTarget, String> {
+    let elevate = app.id.starts_with("HKLM");
+    let key = app.id.split('|').nth(1).unwrap_or("");
+
+    let msi = if guid_like(key) {
+        Some(key.to_string())
+    } else {
+        app.uninstall
+            .as_deref()
+            .and_then(msi_product)
+            .or_else(|| app.quiet_uninstall.as_deref().and_then(msi_product))
+    };
+
+    if let Some(guid) = msi {
+        return Ok(UninstallTarget {
+            exe: r"C:\Windows\System32\msiexec.exe".into(),
+            params: format!("/x {guid}"),
+            dir: None,
+            elevate,
+        });
+    }
+
+    let cmd = app
+        .uninstall
+        .as_deref()
+        .or(app.quiet_uninstall.as_deref())
+        .ok_or_else(|| "Pas de désinstalleur officiel.".to_string())?;
+
+    let (exe, args, dir) = resolve_command(cmd)?;
+    let exe_l = exe.to_lowercase();
+    if !(exe_l.ends_with(".exe") || exe_l.contains("msiexec") || exe_l.contains("rundll32")) {
+        return Err("Désinstalleur non officiel (pas un .exe Windows).".into());
+    }
+    Ok(UninstallTarget {
+        exe,
+        params: join_args(&args),
+        dir,
+        elevate,
+    })
+}
+
+#[cfg(windows)]
+fn launch_and_wait(target: &UninstallTarget) -> Result<u32, String> {
+    use std::mem::{size_of, zeroed};
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, WAIT_TIMEOUT};
+    use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+    use windows::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    let try_verb = |elevate: bool| -> Result<u32, String> {
+        let verb = wide(if elevate { "runas" } else { "open" });
+        let file = wide(&target.exe);
+        let parameters = wide(&target.params);
+        let directory = target.dir.as_deref().map(wide);
+        let mut info: SHELLEXECUTEINFOW = unsafe { zeroed() };
+        info.cbSize = size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_NOCLOSEPROCESS;
+        info.hwnd = HWND::default();
+        info.lpVerb = PCWSTR(verb.as_ptr());
+        info.lpFile = PCWSTR(file.as_ptr());
+        info.lpParameters = if target.params.is_empty() {
+            PCWSTR::null()
+        } else {
+            PCWSTR(parameters.as_ptr())
+        };
+        if let Some(d) = &directory {
+            info.lpDirectory = PCWSTR(d.as_ptr());
+        }
+        info.nShow = SW_SHOWNORMAL.0 as i32;
+
+        unsafe {
+            ShellExecuteExW(&mut info).map_err(|e| {
+                let code = e.code().0 as u32;
+                if code == 0x8007_04C7 || code == 1223 {
+                    "Élévation refusée. Accepte l’UAC, ou lance Mode Jeu en administrateur.".into()
+                } else {
+                    format!("Impossible de lancer le désinstalleur : {e}")
+                }
+            })?;
+            let proc = info.hProcess;
+            if proc.is_invalid() || proc == HANDLE::default() {
+                return Ok(0);
+            }
+            const MAX_MS: u32 = 30 * 60 * 1000;
+            let wr = WaitForSingleObject(proc, MAX_MS);
+            let mut code = 0u32;
+            let _ = GetExitCodeProcess(proc, &mut code);
+            let _ = CloseHandle(proc);
+            if wr == WAIT_TIMEOUT {
+                return Ok(0);
+            }
+            Ok(code)
+        }
+    };
+
+    match try_verb(target.elevate) {
+        Ok(code) => Ok(code),
+        Err(e) if target.elevate && !e.contains("Élévation refusée") => {
+            try_verb(false).or(Err(e))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(not(windows))]
+fn launch_and_wait(_target: &UninstallTarget) -> Result<u32, String> {
+    Err("Désinstallation Windows uniquement.".into())
+}
+
+fn uninstall_ok(code: u32) -> bool {
+    matches!(code, 0 | 1641 | 3010)
+}
+
 pub fn uninstall(id: &str) -> Result<(), String> {
+    if id.starts_with("proc:") {
+        return Err("Cette entrée n’a pas de désinstalleur Windows lié.".into());
+    }
     let apps = {
         invalidate_cache();
         list_installed()
@@ -268,34 +440,23 @@ pub fn uninstall(id: &str) -> Result<(), String> {
     if !app.can_uninstall || app.locked {
         return Err("Ce logiciel ne peut pas être désinstallé (Windows, driver ou protégé).".into());
     }
-    let cmd = app
-        .uninstall
-        .as_deref()
-        .or(app.quiet_uninstall.as_deref())
-        .ok_or_else(|| "Pas de désinstalleur officiel.".to_string())?;
 
-    if let Some(guid) = msi_product(cmd) {
-        let mut c = Command::new("msiexec");
-        c.args(["/x", &guid, "/passive", "/norestart"]);
-        #[cfg(windows)]
-        c.creation_flags(0);
-        c.spawn()
-            .map_err(|e| format!("Impossible de lancer msiexec : {e}"))?;
-        invalidate_cache();
-        return Ok(());
-    }
+    let target = target_from_app(app)?;
+    let code = launch_and_wait(&target)?;
 
-    let (exe, args) = parse_cmdline(cmd).ok_or_else(|| "Commande de désinstallation invalide.".to_string())?;
-    if !Path::new(&exe).exists() && !exe.to_lowercase().ends_with(".exe") {
-        return Err("Désinstalleur introuvable sur le disque.".into());
-    }
-    let mut c = Command::new(&exe);
-    c.args(&args);
-    #[cfg(windows)]
-    c.creation_flags(0);
-    c.spawn()
-        .map_err(|e| format!("Impossible de lancer le désinstalleur : {e}"))?;
     invalidate_cache();
+
+    if code == 1602 {
+        return Err("Désinstallation annulée.".into());
+    }
+    if !uninstall_ok(code) {
+        let still = list_installed().iter().any(|a| a.id == id);
+        if still {
+            return Err(format!(
+                "Le désinstalleur s’est fermé (code {code}) et l’app est encore installée. Réessaie, ou lance Mode Jeu en administrateur."
+            ));
+        }
+    }
     Ok(())
 }
 
