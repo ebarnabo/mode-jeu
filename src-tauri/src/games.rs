@@ -386,40 +386,140 @@ fn pretty_name(stem: &str) -> String {
 
 static CATALOG: Mutex<Option<(Instant, Vec<GameEntry>)>> = Mutex::new(None);
 
-fn installed_catalog() -> Vec<GameEntry> {
-    let now = Instant::now();
-    if let Ok(guard) = CATALOG.lock() {
-        if let Some((at, cached)) = guard.as_ref() {
-            if now.duration_since(*at) < Duration::from_secs(90) {
-                return cached.clone();
-            }
-        }
+#[derive(Serialize, Deserialize, Default, Clone)]
+struct CatalogFile {
+    #[serde(default)]
+    scanned: bool,
+    #[serde(default)]
+    games: Vec<GameEntry>,
+}
+
+fn catalog_path(app: &AppHandle) -> PathBuf {
+    let d = app.path().app_config_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let _ = fs::create_dir_all(&d);
+    d.join("games-catalog.json")
+}
+
+fn slim_entry(mut g: GameEntry) -> GameEntry {
+    g.running = false;
+    g
+}
+
+fn read_disk_catalog(app: &AppHandle) -> CatalogFile {
+    fs::read_to_string(catalog_path(app))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_disk_catalog(app: &AppHandle, file: &CatalogFile) {
+    let slim = CatalogFile {
+        scanned: file.scanned,
+        games: file.games.iter().cloned().map(slim_entry).collect(),
+    };
+    if let Ok(s) = serde_json::to_string_pretty(&slim) {
+        let _ = fs::write(catalog_path(app), s);
     }
+}
+
+fn remember_in_cache(games: Vec<GameEntry>) -> Vec<GameEntry> {
+    if let Ok(mut guard) = CATALOG.lock() {
+        *guard = Some((Instant::now(), games.clone()));
+    }
+    games
+}
+
+fn scan_stores() -> Vec<GameEntry> {
     let mut installed = scan_steam();
     installed.extend(scan_epic());
-    if let Ok(mut guard) = CATALOG.lock() {
-        *guard = Some((now, installed.clone()));
-    }
     installed
 }
 
-pub(crate) fn installed_paths_for(exes: &[String]) -> Vec<String> {
+fn merge_into_catalog(base: Vec<GameEntry>, extra: Vec<GameEntry>) -> Vec<GameEntry> {
+    let mut by_exe: HashMap<String, GameEntry> = HashMap::new();
+    for g in base.into_iter().chain(extra) {
+        by_exe.entry(g.exe.clone()).or_insert(g);
+    }
+    by_exe.into_values().collect()
+}
+
+fn installed_catalog(app: &AppHandle, refresh: bool) -> Vec<GameEntry> {
+    let disk = read_disk_catalog(app);
+    if !refresh {
+        if let Ok(guard) = CATALOG.lock() {
+            if let Some((at, cached)) = guard.as_ref() {
+                if Instant::now().duration_since(*at) < Duration::from_secs(90) {
+                    return cached.clone();
+                }
+            }
+        }
+        if disk.scanned {
+            return remember_in_cache(disk.games);
+        }
+    }
+    let scanned = scan_stores();
+    let games = merge_into_catalog(scanned, disk.games);
+    write_disk_catalog(
+        app,
+        &CatalogFile {
+            scanned: true,
+            games: games.clone(),
+        },
+    );
+    remember_in_cache(games)
+}
+
+/// Garde les jeux ajoutés à la main, sans bloquer un futur scan Steam / Epic.
+pub fn remember_extras(app: &AppHandle, extra: &[ExtraGame]) {
+    if extra.is_empty() {
+        return;
+    }
+    let mut file = read_disk_catalog(app);
+    let mut changed = false;
+    for e in extra {
+        let exe = exe_key(&e.exe);
+        if exe.is_empty() || file.games.iter().any(|g| g.exe == exe) {
+            continue;
+        }
+        file.games.push(GameEntry {
+            id: format!("user:{exe}"),
+            name: if e.name.trim().is_empty() {
+                pretty_name(exe.trim_end_matches(".exe"))
+            } else {
+                e.name.clone()
+            },
+            exe,
+            source: "Choisi".into(),
+            path: None,
+            running: false,
+        });
+        changed = true;
+    }
+    if changed {
+        write_disk_catalog(app, &file);
+        if file.scanned {
+            remember_in_cache(file.games);
+        }
+    }
+}
+
+pub(crate) fn installed_paths_for(app: &AppHandle, exes: &[String]) -> Vec<String> {
     let wanted: HashSet<String> = exes.iter().map(|e| exe_key(e)).collect();
     if wanted.is_empty() {
         return Vec::new();
     }
-    installed_catalog()
+    installed_catalog(app, false)
         .into_iter()
         .filter(|g| wanted.contains(&g.exe))
         .filter_map(|g| g.path)
         .collect()
 }
 
-pub fn list_games(sys: &System, extra: &[ExtraGame]) -> Vec<GameEntry> {
-    merge(installed_catalog(), extra, &running_exes(sys))
+pub fn list_games(app: &AppHandle, sys: &System, extra: &[ExtraGame], refresh: bool) -> Vec<GameEntry> {
+    merge(installed_catalog(app, refresh), extra, &running_exes(sys))
 }
 
-fn find_known_game(exe: &str, extra: &[ExtraGame]) -> Option<GameEntry> {
+fn find_known_game(app: &AppHandle, exe: &str, extra: &[ExtraGame]) -> Option<GameEntry> {
     let key = exe_key(exe);
     if let Some(e) = extra.iter().find(|e| exe_key(&e.exe) == key) {
         return Some(GameEntry {
@@ -435,7 +535,7 @@ fn find_known_game(exe: &str, extra: &[ExtraGame]) -> Option<GameEntry> {
             running: true,
         });
     }
-    installed_catalog().into_iter().find(|g| g.exe == key)
+    installed_catalog(app, false).into_iter().find(|g| g.exe == key)
 }
 
 pub fn start_watcher(app: AppHandle) {
@@ -502,7 +602,7 @@ fn tick(app: &AppHandle) {
     }
 
     for exe in newcomers {
-        let Some(game) = find_known_game(&exe, &cfg.extra_games) else {
+        let Some(game) = find_known_game(app, &exe, &cfg.extra_games) else {
             continue;
         };
         if recently_prompted(&exe) {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -17,6 +17,7 @@ import {
   Square,
   Plus,
   Package,
+  RefreshCw,
 } from "lucide-react";
 import { UpdateBar, UpdateProvider, UpdatesPanel } from "@/components/UpdateBar";
 import { PowerIgnition } from "@/components/PowerIgnition";
@@ -176,10 +177,10 @@ export default function App() {
     appsClosed: number;
   } | null>(null);
   const [games, setGames] = useState<GameEntry[]>([]);
-  const [gamesLoaded, setGamesLoaded] = useState(false);
   const [gamesBusy, setGamesBusy] = useState(false);
   const [gameQuery, setGameQuery] = useState("");
   const [prompt, setPrompt] = useState<GameDetected | null>(null);
+  const gamesAsked = useRef(false);
 
   const refresh = useCallback(async () => {
     const [c, s] = await Promise.all([
@@ -330,23 +331,45 @@ export default function App() {
     void persistKeep(next);
   };
 
-  const loadGames = async () => {
+  const loadGames = useCallback(async (refresh = false) => {
     setGamesBusy(true);
     try {
       if (config?.watch_games !== false) {
         await invoke("ensure_game_watch");
       }
       const [g, p] = await Promise.all([
-        invoke<GameEntry[]>("list_games"),
+        invoke<GameEntry[]>("list_games", { refresh }),
         invoke<ProcGroup[]>("list_processes"),
       ]);
       setGames(g);
       setProcs(p);
-      setGamesLoaded(true);
     } finally {
       setGamesBusy(false);
     }
-  };
+  }, [config?.watch_games]);
+
+  useEffect(() => {
+    if (!config) return;
+    const extra = config.extra_games ?? [];
+    if (extra.length === 0) return;
+    setGames((prev) => {
+      if (prev.length > 0) return prev;
+      return extra.map((g) => ({
+        id: `user:${g.exe.toLowerCase()}`,
+        name: g.name,
+        exe: g.exe.toLowerCase(),
+        source: "Choisi",
+        path: null,
+        running: false,
+      }));
+    });
+  }, [config]);
+
+  useEffect(() => {
+    if (tab !== "jeux" || gamesAsked.current) return;
+    gamesAsked.current = true;
+    void loadGames(false);
+  }, [tab, loadGames]);
 
   const applyAmdProfile = () => {
     if (!config) return;
@@ -571,43 +594,35 @@ export default function App() {
 
       <main className="scroll-area relative z-10 flex-1 overflow-y-auto px-7" style={{ paddingBottom: 132 }}>
         {tab === "session" && (
-          <section className="space-y-4">
-            {active ? (
-              <ActivationBadges
-                title={`${formatRam(session?.freed_mb ?? 0)} libérés`}
-                note="Mesuré à la fermeture. Ce n’est pas un gain d’images."
-                items={(session?.closed_use?.length
-                  ? session.closed_use
-                  : (session?.closed_names ?? []).map((name) => ({ name, mb: 0, cpu_pct: 0 }))
-                ).map((item) => ({
-                  name: item.name,
-                  mb: item.mb,
-                  cpu: item.cpu_pct ?? 0,
-                }))}
-              />
-            ) : (
-              <>
-                <p className="max-w-[42ch] text-[15px] leading-relaxed text-muted">
-                  Un bouton. Steam, Discord et Windows restent. Le reste se coupe le temps de jouer.
-                </p>
-                <ActivationBadges
-                  title={
-                    procs.length === 0
-                      ? "Mesure…"
-                      : willClose.length
-                        ? `${formatRam(willClose.reduce((s, p) => s + p.memory_mb, 0))} occupés`
-                        : "Rien à fermer"
-                  }
-                  note="RAM occupée maintenant par les apps qui seront fermées. Le CPU n’apparaît que s’il a été mesuré."
-                  items={willClose.map((p) => ({
+          <SessionBoard
+            active={active}
+            loading={!active && procs.length === 0}
+            totalMb={
+              active
+                ? session?.freed_mb ?? 0
+                : willClose.reduce((s, p) => s + p.memory_mb, 0)
+            }
+            items={
+              active
+                ? (session?.closed_use?.length
+                    ? session.closed_use
+                    : (session?.closed_names ?? []).map((name) => ({
+                        name,
+                        mb: 0,
+                        cpu_pct: 0,
+                      }))
+                  ).map((item) => ({
+                    name: item.name,
+                    mb: item.mb,
+                    cpu: item.cpu_pct ?? 0,
+                  }))
+                : willClose.map((p) => ({
                     name: p.name,
                     mb: p.memory_mb,
                     cpu: p.cpu_pct,
-                  }))}
-                />
-              </>
-            )}
-          </section>
+                  }))
+            }
+          />
         )}
 
         {tab === "apps" && (
@@ -830,30 +845,35 @@ export default function App() {
               />
             </div>
 
-            {!gamesLoaded ? (
-              <div className="rounded-2xl border border-dashed border-line px-5 py-10 text-center">
-                <p className="text-[13px] text-muted">Rien n’est lu tant que tu n’as pas cherché.</p>
-                <Button className="mt-5" onClick={() => void loadGames()} disabled={gamesBusy}>
-                  {gamesBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                  Chercher les jeux
-                </Button>
+            <div className="flex gap-2">
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+                <Input
+                  value={gameQuery}
+                  onChange={(e) => setGameQuery(e.target.value)}
+                  placeholder="Filtrer"
+                  className="pl-11"
+                />
               </div>
-            ) : (
-              <>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
-              <Input
-                value={gameQuery}
-                onChange={(e) => setGameQuery(e.target.value)}
-                placeholder="Filtrer"
-                className="pl-11"
-              />
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={gamesBusy}
+                onClick={() => void loadGames(true)}
+                aria-label="Actualiser les jeux"
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", gamesBusy && "animate-spin")} />
+              </Button>
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-line bg-surface/60">
-              {visibleGames.length === 0 ? (
+              {gamesBusy && games.length === 0 ? (
+                <div className="flex justify-center py-12">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted" />
+                </div>
+              ) : visibleGames.length === 0 ? (
                 <p className="px-4 py-10 text-center text-[13px] text-muted">
-                  Aucun jeu. Installe Steam/Epic, ou ajoute un process ouvert.
+                  Aucun jeu mémorisé. Installe Steam/Epic, ou ajoute un process ouvert.
                 </p>
               ) : (
                 visibleGames.map((g, i) => {
@@ -899,7 +919,7 @@ export default function App() {
               <div>
                 <h3 className="mb-2 text-[13px] font-semibold text-paper">Déjà ouvert</h3>
                 <p className="mb-3 text-[12px] text-muted">
-                  Pas dans Steam / Epic : ajoute-le pour le reconnaître au prochain lancement.
+                  Ajoute-le une fois. Il restera reconnu au prochain lancement.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {openCandidates.map((p) => (
@@ -915,8 +935,6 @@ export default function App() {
                   ))}
                 </div>
               </div>
-            )}
-              </>
             )}
           </section>
         )}
@@ -1418,7 +1436,7 @@ export default function App() {
 
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 h-36 bg-gradient-to-t from-ink via-ink/90 to-transparent" />
       <div className="absolute inset-x-0 bottom-0 z-30 px-7 pb-7">
-        {!busy && (
+        {!busy && tab !== "session" && (
           <p className="mb-2 text-center font-mono text-[12px] tabular-nums text-muted">
             {active
               ? `${formatRam(session?.freed_mb ?? 0)} libérés à la fermeture`
@@ -1498,50 +1516,73 @@ function OptionRow({
   );
 }
 
-function ActivationBadges({
-  title,
-  note,
+function SessionBoard({
+  active,
+  loading,
+  totalMb,
   items,
 }: {
-  title: string;
-  note: string;
+  active: boolean;
+  loading: boolean;
+  totalMb: number;
   items: { name: string; mb: number; cpu: number }[];
 }) {
-  const shown = items.slice(0, 8);
+  if (loading) {
+    return (
+      <section className="flex items-center gap-3 pt-2">
+        <Loader2 className="h-4 w-4 animate-spin text-muted" />
+        <p className="text-[15px] text-muted">Mesure de la RAM ouverte…</p>
+      </section>
+    );
+  }
+
+  const empty = items.length === 0;
+  const figure = empty && !active ? "—" : formatRam(totalMb);
+  const caption = active
+    ? empty
+      ? "Aucune app mise en pause. Ce n’est pas un gain d’images."
+      : `${items.length} app${items.length > 1 ? "s" : ""} fermées · mesuré à la fermeture, pas des FPS`
+    : empty
+      ? "Rien au-dessus du seuil. Steam, Discord et Windows restent."
+      : `${items.length} app${items.length > 1 ? "s" : ""} qui seront fermées · mesuré maintenant`;
+
   return (
-    <div className="space-y-3">
+    <section>
+      {!active && (
+        <p className="max-w-[40ch] text-[15px] leading-relaxed text-muted">
+          Un bouton. Steam, Discord et Windows restent. Le reste se coupe le temps de jouer.
+        </p>
+      )}
       <p
         className={cn(
-          "font-mono text-[28px] font-semibold leading-none tabular-nums",
-          items.length ? "text-jade" : "text-paper"
+          active || !empty ? "mt-6" : "mt-8",
+          "font-mono text-[44px] font-semibold leading-none tracking-tight tabular-nums",
+          empty ? "text-paper" : "text-jade"
         )}
       >
-        {title}
+        {figure}
       </p>
-      {shown.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {shown.map((item, i) => (
-            <span
+      <p className="mt-3 max-w-[46ch] text-[13px] leading-relaxed text-muted">{caption}</p>
+      {items.length > 0 && (
+        <ul className="mt-6 overflow-hidden rounded-2xl border border-line bg-surface/60">
+          {items.map((item, i) => (
+            <li
               key={`${item.name}-${i}`}
-              className="inline-flex items-center gap-1.5 rounded-full border border-line bg-raised px-2.5 py-1 text-[12px] text-paper"
+              className={cn(
+                "flex items-baseline justify-between gap-4 px-4 py-3",
+                i > 0 && "border-t border-line/80"
+              )}
             >
-              <span className="max-w-[16ch] truncate">{item.name}</span>
-              {item.mb > 0 && (
-                <span className="font-mono tabular-nums text-paper/80">{formatRam(item.mb)}</span>
-              )}
-              {item.cpu >= 1 && (
-                <span className="font-mono tabular-nums text-muted">{Math.round(item.cpu)} % CPU</span>
-              )}
-            </span>
+              <span className="min-w-0 truncate text-[14px] font-medium text-paper">{item.name}</span>
+              <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
+                {item.mb > 0 ? formatRam(item.mb) : "—"}
+                {item.cpu >= 1 ? ` · ${Math.round(item.cpu)} %` : ""}
+              </span>
+            </li>
           ))}
-          {items.length > shown.length && (
-            <span className="rounded-full px-2 py-1 text-[12px] text-muted">
-              +{items.length - shown.length}
-            </span>
-          )}
-        </div>
+        </ul>
       )}
-    </div>
+    </section>
   );
 }
 

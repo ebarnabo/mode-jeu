@@ -41,11 +41,13 @@ type AnalyzeReport = {
 };
 
 type View = "disks" | "installed" | "open";
+type SoftSort = "name" | "size" | "dup";
 
 export function SoftwarePanel() {
   const [view, setView] = useState<View>("disks");
   const [apps, setApps] = useState<InstalledApp[]>([]);
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<SoftSort>("name");
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [report, setReport] = useState<AnalyzeReport | null>(null);
@@ -72,14 +74,25 @@ export function SoftwarePanel() {
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return apps.filter(
+    const list = apps.filter(
       (a) =>
         !q ||
         a.name.toLowerCase().includes(q) ||
         a.publisher.toLowerCase().includes(q) ||
         a.duplicate_group.toLowerCase().includes(q)
     );
-  }, [apps, query]);
+    return [...list].sort((a, b) => {
+      if (sort === "size") {
+        return b.size_mb - a.size_mb || a.name.localeCompare(b.name, "fr");
+      }
+      if (sort === "dup") {
+        const da = a.duplicate_group ? 0 : 1;
+        const db = b.duplicate_group ? 0 : 1;
+        return da - db || a.name.localeCompare(b.name, "fr");
+      }
+      return a.name.localeCompare(b.name, "fr");
+    });
+  }, [apps, query, sort]);
 
   const duplicateGroups = useMemo(() => {
     const groups = new Set<string>();
@@ -185,8 +198,8 @@ export function SoftwarePanel() {
 
       {view === "installed" && (
         <>
-          <div className="flex gap-2">
-            <div className="relative min-w-0 flex-1">
+          <div className="flex flex-wrap gap-2">
+            <div className="relative min-w-[160px] flex-1">
               <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
               <Input
                 value={query}
@@ -194,6 +207,30 @@ export function SoftwarePanel() {
                 placeholder="Nom ou éditeur"
                 className="pl-11"
               />
+            </div>
+            <div className="flex gap-1 rounded-xl border border-line bg-surface/70 p-1">
+              {(
+                [
+                  ["name", "Nom"],
+                  ["size", "Taille"],
+                  ["dup", "Doublons"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setSort(id)}
+                  className={cn(
+                    "rounded-lg px-2.5 py-2 text-[12px] font-semibold transition-colors",
+                    sort === id
+                      ? "bg-raised text-paper shadow-[inset_0_0_0_1px_rgba(226,177,90,0.28)]"
+                      : "text-muted hover:text-paper"
+                  )}
+                >
+                  {label}
+                  {id === "size" ? " ↓" : ""}
+                </button>
+              ))}
             </div>
             <Button
               size="sm"

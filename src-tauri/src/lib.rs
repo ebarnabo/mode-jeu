@@ -559,6 +559,7 @@ fn get_config(app: AppHandle) -> Config {
 #[tauri::command]
 fn save_config(app: AppHandle, config: Config) {
     store_config(&app, &config);
+    games::remember_extras(&app, &config.extra_games);
     sync_from_config(&app, &config);
 }
 
@@ -608,11 +609,11 @@ fn toggle_overlay_visibility(app: AppHandle) -> OverlayConfig {
 }
 
 #[tauri::command]
-fn list_games(app: AppHandle) -> Vec<games::GameEntry> {
+fn list_games(app: AppHandle, refresh: Option<bool>) -> Vec<games::GameEntry> {
     let cfg = load_config(&app);
     with_proc_sys(|sys| {
         sys.refresh_processes(ProcessesToUpdate::All, false);
-        games::list_games(sys, &cfg.extra_games)
+        games::list_games(&app, sys, &cfg.extra_games, refresh.unwrap_or(false))
     })
 }
 
@@ -664,7 +665,7 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
     c.output().ok().map(|o| String::from_utf8_lossy(&o.stdout).to_string())
 }
 
-fn game_gpu_paths(groups: &[ProcGroup], cfg: &Config) -> Vec<String> {
+fn game_gpu_paths(app: &AppHandle, groups: &[ProcGroup], cfg: &Config) -> Vec<String> {
     if !cfg.gpu_high_perf {
         return Vec::new();
     }
@@ -698,7 +699,7 @@ fn game_gpu_paths(groups: &[ProcGroup], cfg: &Config) -> Vec<String> {
             }
         }
     }
-    for path in games::installed_paths_for(&keys) {
+    for path in games::installed_paths_for(&app, &keys) {
         if seen.insert(path.to_lowercase()) {
             paths.push(path);
         }
@@ -732,7 +733,7 @@ fn activate(app: AppHandle) -> Result<Session, String> {
         cpu_boost: cfg.cpu_boost,
         focus_assist: cfg.focus_assist,
         gpu_high_perf: cfg.gpu_high_perf,
-        gpu_paths: game_gpu_paths(&groups, &cfg),
+        gpu_paths: game_gpu_paths(&app, &groups, &cfg),
         stop_services: cfg.stop_services,
         services: cfg.services.clone(),
     });
@@ -1239,7 +1240,9 @@ pub fn run_app() {
             let cfg = load_config(app.handle());
             sync_from_config(app.handle(), &cfg);
             // Watcher jeux : seulement si l’utilisateur a déjà choisi des autos.
-            if cfg.watch_games && !cfg.auto_game_exes.is_empty() {
+            if cfg.watch_games
+                && (!cfg.auto_game_exes.is_empty() || !cfg.extra_games.is_empty())
+            {
                 games::start_watcher(app.handle().clone());
             }
             Ok(())
