@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type MouseEvent, type PointerEvent, type 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { EyeOff, File, Folder, Pause, Play, X } from "lucide-react";
+import { NotchMascot } from "@/components/NotchMascot";
 import { cn } from "@/lib/utils";
 
 type OverlayConfig = {
@@ -261,18 +262,15 @@ export default function OverlayApp() {
           style={{ background: `rgba(8, 9, 12, ${Math.max(0.82, opacity)})` }}
         >
           <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              className="flex items-center gap-2"
-              title="Ouvrir Mode Jeu"
-              aria-label="Ouvrir Mode Jeu"
+            <NotchMascot
+              cpu={m?.cpu_pct ?? null}
+              ram={m?.ram_pct ?? null}
+              playing={media.playing}
+              holding={shelf.length > 0}
+              catching={dropHover}
+              track={media.title}
               onClick={() => run("app", "open_main")}
-            >
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brass shadow-[0_0_6px_rgba(214,166,74,.85)]" />
-              <span className="font-display text-[10px] font-semibold uppercase tracking-[0.18em] text-brass/90">
-                MJ
-              </span>
-            </button>
+            />
             <span className="h-4 w-px bg-white/10" />
             <span className="font-mono text-[11px] font-semibold tabular-nums text-paper">
               {m ? pair(m.ram_used_gb, m.ram_total_gb, 1) : "—"}
