@@ -268,7 +268,7 @@ fn scan_epic() -> Vec<GameEntry> {
     games
 }
 
-fn looks_like_game_path(path: &str) -> bool {
+pub(crate) fn looks_like_game_path(path: &str) -> bool {
     let p = path.to_lowercase();
     p.contains("\\steamapps\\common\\")
         || p.contains("\\epic games\\")
@@ -401,6 +401,18 @@ fn installed_catalog() -> Vec<GameEntry> {
         *guard = Some((now, installed.clone()));
     }
     installed
+}
+
+pub(crate) fn installed_paths_for(exes: &[String]) -> Vec<String> {
+    let wanted: HashSet<String> = exes.iter().map(|e| exe_key(e)).collect();
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    installed_catalog()
+        .into_iter()
+        .filter(|g| wanted.contains(&g.exe))
+        .filter_map(|g| g.path)
+        .collect()
 }
 
 pub fn list_games(sys: &System, extra: &[ExtraGame]) -> Vec<GameEntry> {

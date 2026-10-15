@@ -75,6 +75,9 @@ type Config = {
   disable_background_apps: boolean;
   mmcss_gaming: boolean;
   cpu_unpark: boolean;
+  cpu_boost: boolean;
+  focus_assist: boolean;
+  gpu_high_perf: boolean;
   min_close_mb: number;
   reopen_closed_apps: boolean;
   watch_games: boolean;
@@ -335,6 +338,9 @@ export default function App() {
       disable_background_apps: true,
       mmcss_gaming: true,
       cpu_unpark: true,
+      cpu_boost: true,
+      focus_assist: true,
+      gpu_high_perf: true,
       stop_services: true,
       min_close_mb: 40,
     });
@@ -1154,6 +1160,24 @@ export default function App() {
                   hint="Cœurs déparkés, USB sans suspend. Annulé à la sortie."
                   checked={config.cpu_unpark !== false}
                   onChange={(v) => patch({ cpu_unpark: v })}
+                />
+                <OptionRow
+                  label="Boost processeur agressif"
+                  hint="Sur secteur : boost au maximum et préférence énergie à fond. Utile quand le CPU limite la carte. Restauré à la sortie."
+                  checked={config.cpu_boost !== false}
+                  onChange={(v) => patch({ cpu_boost: v })}
+                />
+                <OptionRow
+                  label="Focus assist"
+                  hint="Alarmes seulement pendant la session, puis retour à l’état précédent."
+                  checked={config.focus_assist !== false}
+                  onChange={(v) => patch({ focus_assist: v })}
+                />
+                <OptionRow
+                  label="GPU haute performance"
+                  hint="Pour les jeux connus. Avec une seule carte, Windows l’utilise déjà."
+                  checked={config.gpu_high_perf !== false}
+                  onChange={(v) => patch({ gpu_high_perf: v })}
                 />
                 <OptionRow
                   label="Couper les notifications toast"

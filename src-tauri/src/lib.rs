@@ -11,7 +11,7 @@ mod tweaks;
 mod amd_adl;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -134,6 +134,15 @@ pub struct Config {
     pub mmcss_gaming: bool,
     #[serde(default = "default_true")]
     pub cpu_unpark: bool,
+    /// Boost agressif + préférence énergie à fond, secteur seulement.
+    #[serde(default = "default_true")]
+    pub cpu_boost: bool,
+    /// Focus assist en « alarmes seulement » le temps de la session.
+    #[serde(default = "default_true")]
+    pub focus_assist: bool,
+    /// Préférence GPU haute performance pour les jeux connus.
+    #[serde(default = "default_true")]
+    pub gpu_high_perf: bool,
     /// Ignore les apps sous ce seuil (Mo) à la fermeture — moins de bruit, plus rapide.
     #[serde(default = "default_min_close_mb")]
     pub min_close_mb: u64,
@@ -189,6 +198,9 @@ impl Default for Config {
             disable_background_apps: true,
             mmcss_gaming: true,
             cpu_unpark: true,
+            cpu_boost: true,
+            focus_assist: true,
+            gpu_high_perf: true,
             min_close_mb: default_min_close_mb(),
             reopen_closed_apps: true,
             watch_games: true,
@@ -623,6 +635,48 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
     c.output().ok().map(|o| String::from_utf8_lossy(&o.stdout).to_string())
 }
 
+fn game_gpu_paths(groups: &[ProcGroup], cfg: &Config) -> Vec<String> {
+    if !cfg.gpu_high_perf {
+        return Vec::new();
+    }
+    let mut wanted: HashSet<String> = cfg
+        .auto_game_exes
+        .iter()
+        .chain(cfg.extra_games.iter().map(|g| &g.exe))
+        .map(|exe| {
+            let mut name = exe.to_lowercase();
+            if !name.ends_with(".exe") {
+                name.push_str(".exe");
+            }
+            name
+        })
+        .collect();
+    if let Some(fg) = groups.iter().find(|g| g.foreground) {
+        if fg.path.as_deref().is_some_and(games::looks_like_game_path) {
+            wanted.insert(fg.key.clone());
+        }
+    }
+    let keys: Vec<String> = wanted.iter().cloned().collect();
+    let mut seen = HashSet::new();
+    let mut paths = Vec::new();
+    for group in groups {
+        if !wanted.contains(&group.key) {
+            continue;
+        }
+        if let Some(path) = &group.path {
+            if seen.insert(path.to_lowercase()) {
+                paths.push(path.clone());
+            }
+        }
+    }
+    for path in games::installed_paths_for(&keys) {
+        if seen.insert(path.to_lowercase()) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
 #[tauri::command]
 fn activate(app: AppHandle) -> Result<Session, String> {
     let cfg = load_config(&app);
@@ -646,6 +700,10 @@ fn activate(app: AppHandle) -> Result<Session, String> {
         disable_background_apps: cfg.disable_background_apps,
         mmcss_gaming: cfg.mmcss_gaming,
         cpu_unpark: cfg.cpu_unpark,
+        cpu_boost: cfg.cpu_boost,
+        focus_assist: cfg.focus_assist,
+        gpu_high_perf: cfg.gpu_high_perf,
+        gpu_paths: game_gpu_paths(&groups, &cfg),
         stop_services: cfg.stop_services,
         services: cfg.services.clone(),
     });
