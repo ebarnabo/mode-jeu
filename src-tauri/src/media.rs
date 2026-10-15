@@ -22,6 +22,7 @@ mod win {
     };
 
     static MGR: Mutex<Option<Manager>> = Mutex::new(None);
+    static CACHE: Mutex<Option<(std::time::Instant, MediaNow)>> = Mutex::new(None);
 
     fn manager() -> Option<Manager> {
         if let Ok(g) = MGR.lock() {
@@ -37,6 +38,21 @@ mod win {
     }
 
     pub fn now() -> MediaNow {
+        if let Ok(g) = CACHE.lock() {
+            if let Some((at, cached)) = g.as_ref() {
+                if at.elapsed() < std::time::Duration::from_millis(2500) {
+                    return cached.clone();
+                }
+            }
+        }
+        let fresh = now_uncached();
+        if let Ok(mut g) = CACHE.lock() {
+            *g = Some((std::time::Instant::now(), fresh.clone()));
+        }
+        fresh
+    }
+
+    fn now_uncached() -> MediaNow {
         let Some(mgr) = manager() else {
             return MediaNow::default();
         };
@@ -74,6 +90,9 @@ mod win {
         if let Some(mgr) = manager() {
             if let Ok(session) = mgr.GetCurrentSession() {
                 let _ = session.TryTogglePlayPauseAsync().and_then(|op| op.get());
+                if let Ok(mut g) = CACHE.lock() {
+                    *g = None;
+                }
                 return now();
             }
         }

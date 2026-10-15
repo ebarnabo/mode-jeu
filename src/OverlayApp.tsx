@@ -83,10 +83,13 @@ export default function OverlayApp() {
   }, []);
 
   const notchOn = !!cfg?.notch_visible;
-  const pollMs = notchOn ? 4000 : Math.max(2000, cfg?.interval_ms || 2000);
+  const overlayLive =
+    notchOn ||
+    (!!cfg?.enabled && !cfg?.hidden && (!!cfg?.session_active || !!cfg?.always));
+  const pollMs = notchOn ? 5000 : Math.max(2500, cfg?.interval_ms || 3000);
 
   useEffect(() => {
-    if (!cfg) return;
+    if (!cfg || !overlayLive) return;
     let alive = true;
     const tick = async () => {
       if (document.hidden) return;
@@ -108,7 +111,7 @@ export default function OverlayApp() {
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [cfg, pollMs]);
+  }, [cfg, pollMs, overlayLive]);
 
   useEffect(() => {
     if (!notchOn) return;
@@ -123,7 +126,7 @@ export default function OverlayApp() {
       }
     };
     tick();
-    const id = window.setInterval(tick, 2000);
+    const id = window.setInterval(tick, 4000);
     return () => {
       alive = false;
       window.clearInterval(id);

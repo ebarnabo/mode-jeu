@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use sysinfo::{ProcessesToUpdate, System};
+use sysinfo::System;
 use tauri::{AppHandle, Emitter, Manager};
 
 const SKIP_EXE: &[&str] = &[
@@ -386,13 +386,12 @@ fn pretty_name(stem: &str) -> String {
 
 static CATALOG: Mutex<Option<(Instant, Vec<GameEntry>)>> = Mutex::new(None);
 
-pub fn list_games(sys: &System, extra: &[ExtraGame]) -> Vec<GameEntry> {
-    let running = running_exes(sys);
+fn installed_catalog() -> Vec<GameEntry> {
     let now = Instant::now();
     if let Ok(guard) = CATALOG.lock() {
         if let Some((at, cached)) = guard.as_ref() {
             if now.duration_since(*at) < Duration::from_secs(90) {
-                return merge(cached.clone(), extra, &running);
+                return cached.clone();
             }
         }
     }
@@ -401,7 +400,30 @@ pub fn list_games(sys: &System, extra: &[ExtraGame]) -> Vec<GameEntry> {
     if let Ok(mut guard) = CATALOG.lock() {
         *guard = Some((now, installed.clone()));
     }
-    merge(installed, extra, &running)
+    installed
+}
+
+pub fn list_games(sys: &System, extra: &[ExtraGame]) -> Vec<GameEntry> {
+    merge(installed_catalog(), extra, &running_exes(sys))
+}
+
+fn find_known_game(exe: &str, extra: &[ExtraGame]) -> Option<GameEntry> {
+    let key = exe_key(exe);
+    if let Some(e) = extra.iter().find(|e| exe_key(&e.exe) == key) {
+        return Some(GameEntry {
+            id: format!("user:{key}"),
+            name: if e.name.trim().is_empty() {
+                pretty_name(key.trim_end_matches(".exe"))
+            } else {
+                e.name.clone()
+            },
+            exe: key,
+            source: "Choisi".into(),
+            path: None,
+            running: true,
+        });
+    }
+    installed_catalog().into_iter().find(|g| g.exe == key)
 }
 
 pub fn start_watcher(app: AppHandle) {
@@ -411,37 +433,28 @@ pub fn start_watcher(app: AppHandle) {
     std::thread::Builder::new()
         .name("game-watch".into())
         .spawn(move || {
-            let mut sys = System::new();
-            sys.refresh_processes(ProcessesToUpdate::All, false);
-            let initial: HashSet<String> = running_exes(&sys).into_keys().collect();
             if let Ok(mut g) = SEEN.lock() {
-                *g = Some(initial);
+                *g = Some(running_exe_names());
             }
             std::thread::sleep(Duration::from_secs(8));
             loop {
-                tick(&app, &mut sys);
-                std::thread::sleep(Duration::from_secs(5));
+                if crate::session_is_active() {
+                    std::thread::sleep(Duration::from_secs(12));
+                    continue;
+                }
+                tick(&app);
+                std::thread::sleep(Duration::from_secs(8));
             }
         })
         .ok();
 }
 
-fn session_active(app: &AppHandle) -> bool {
-    super::read_json::<super::Session>(app, "session.json").active
-}
-
-fn tick(app: &AppHandle, sys: &mut System) {
+fn tick(app: &AppHandle) {
     let cfg = super::load_config(app);
     if !cfg.watch_games {
         return;
     }
-    // Pendant une session, on ne poll pas : l’app reste légère en jeu.
-    if session_active(app) {
-        return;
-    }
-    sys.refresh_processes(ProcessesToUpdate::All, false);
-    let running = running_exes(sys);
-    let now_set: HashSet<String> = running.keys().cloned().collect();
+    let now_set = running_exe_names();
     let mut seen_guard = SEEN.lock().unwrap_or_else(|e| e.into_inner());
     let seen = seen_guard.get_or_insert_with(HashSet::new);
     let newcomers: Vec<String> = now_set.difference(seen).cloned().collect();
@@ -476,9 +489,8 @@ fn tick(app: &AppHandle, sys: &mut System) {
         return;
     }
 
-    let catalog = list_games(sys, &cfg.extra_games);
     for exe in newcomers {
-        let Some(game) = catalog.iter().find(|g| g.exe == exe) else {
+        let Some(game) = find_known_game(&exe, &cfg.extra_games) else {
             continue;
         };
         if recently_prompted(&exe) {
@@ -497,6 +509,49 @@ fn tick(app: &AppHandle, sys: &mut System) {
         }
         let _ = app.emit("game-detected", &payload);
         return;
+    }
+}
+
+fn running_exe_names() -> HashSet<String> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        };
+        let mut out = HashSet::new();
+        unsafe {
+            let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+                return out;
+            };
+            let mut pe = PROCESSENTRY32W {
+                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                ..Default::default()
+            };
+            if Process32FirstW(snap, &mut pe).is_ok() {
+                loop {
+                    let end = pe
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(pe.szExeFile.len());
+                    let name = String::from_utf16_lossy(&pe.szExeFile[..end]);
+                    if !name.is_empty() {
+                        out.insert(exe_key(&name));
+                    }
+                    if Process32NextW(snap, &mut pe).is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = CloseHandle(snap);
+        }
+        out
+    }
+    #[cfg(not(windows))]
+    {
+        HashSet::new()
     }
 }
 

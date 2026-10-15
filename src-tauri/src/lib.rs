@@ -1,3 +1,4 @@
+mod boost;
 mod disks;
 mod games;
 mod media;
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use sysinfo::{ProcessesToUpdate, System};
@@ -26,6 +28,12 @@ use overlay::{OverlayConfig, OverlayPayload};
 use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x0800_0000;
+
+static SESSION_ON: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn session_is_active() -> bool {
+    SESSION_ON.load(Ordering::Relaxed)
+}
 
 const CRITICAL: &[&str] = &[
     "system", "registry", "smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe",
@@ -124,6 +132,8 @@ pub struct Config {
     pub disable_background_apps: bool,
     #[serde(default)]
     pub mmcss_gaming: bool,
+    #[serde(default = "default_true")]
+    pub cpu_unpark: bool,
     /// Ignore les apps sous ce seuil (Mo) à la fermeture — moins de bruit, plus rapide.
     #[serde(default = "default_min_close_mb")]
     pub min_close_mb: u64,
@@ -172,12 +182,13 @@ impl Default for Config {
             start_with_windows: false,
             disable_game_dvr: true,
             enable_game_mode: true,
-            disable_notifications: false,
+            disable_notifications: true,
             visual_effects_perf: false,
-            disable_transparency: false,
+            disable_transparency: true,
             disable_widgets: true,
-            disable_background_apps: false,
-            mmcss_gaming: false,
+            disable_background_apps: true,
+            mmcss_gaming: true,
+            cpu_unpark: true,
             min_close_mb: default_min_close_mb(),
             reopen_closed_apps: true,
             watch_games: true,
@@ -198,6 +209,8 @@ pub struct Session {
     pub stopped_services: Vec<String>,
     #[serde(default)]
     pub tweaks: tweaks::TweaksSnapshot,
+    #[serde(default)]
+    pub boost: boost::BoostSnapshot,
     /// Identifiant du boot Windows au moment de l'activation (epoch sec du démarrage).
     /// Si le PC a redémarré, la session est considérée périmée.
     #[serde(default)]
@@ -230,6 +243,7 @@ fn boot_ids_match(stored: u64, current: u64) -> bool {
 fn sanitize_session(app: &AppHandle) -> Session {
     let session = read_json::<Session>(app, "session.json");
     if !session.active {
+        SESSION_ON.store(false, Ordering::SeqCst);
         return session;
     }
 
@@ -239,12 +253,15 @@ fn sanitize_session(app: &AppHandle) -> Session {
         .is_some_and(|id| boot_ids_match(id, boot));
 
     if still_valid {
+        SESSION_ON.store(true, Ordering::SeqCst);
         return session;
     }
 
     // Session fantôme (reboot, crash ancien format, etc.) :
     // on annule les tweaks système, sans relancer les apps (boot déjà passé).
+    boost::restore(&session.boost);
     tweaks::restore(&session.tweaks);
+    SESSION_ON.store(false, Ordering::SeqCst);
     if session.tweaks.previous_plan.is_none() {
         if let Some(plan) = &session.previous_plan {
             run("powercfg", &["/setactive", plan]);
@@ -308,7 +325,7 @@ fn is_critical(name: &str) -> bool {
     CRITICAL.contains(&name.to_lowercase().as_str())
 }
 
-fn is_safe_by_default(name: &str, path: &Option<String>) -> bool {
+pub(crate) fn is_safe_by_default(name: &str, path: &Option<String>) -> bool {
     let key = name.to_lowercase();
     if SAFE_EXACT.contains(&key.as_str()) {
         return true;
@@ -628,6 +645,7 @@ fn activate(app: AppHandle) -> Result<Session, String> {
         disable_widgets: cfg.disable_widgets,
         disable_background_apps: cfg.disable_background_apps,
         mmcss_gaming: cfg.mmcss_gaming,
+        cpu_unpark: cfg.cpu_unpark,
         stop_services: cfg.stop_services,
         services: cfg.services.clone(),
     });
@@ -670,6 +688,14 @@ fn activate(app: AppHandle) -> Result<Session, String> {
         *guard = None;
     }
 
+    let mut game_exes = cfg.auto_game_exes.clone();
+    game_exes.extend(cfg.extra_games.iter().map(|g| g.exe.clone()));
+    if let Some(fg) = groups.iter().find(|g| g.foreground) {
+        game_exes.push(fg.key.clone());
+    }
+    session.boost = boost::apply(&cfg.keep, &game_exes);
+    SESSION_ON.store(true, Ordering::SeqCst);
+
     write_json(&app, "session.json", &session);
     overlay::sync_overlay(&app, &cfg.overlay, true);
     overlay::emit_config(&app, &cfg.overlay, true);
@@ -693,6 +719,8 @@ fn restore(app: AppHandle) -> Result<Session, String> {
 fn restore_session(app: &AppHandle) -> Session {
     let session = read_json::<Session>(app, "session.json");
     let cfg = load_config(app);
+    boost::restore(&session.boost);
+    SESSION_ON.store(false, Ordering::SeqCst);
 
     if cfg.reopen_closed_apps {
         for path in &session.closed {
@@ -703,24 +731,15 @@ fn restore_session(app: &AppHandle) -> Session {
         }
     }
 
-    // Nouveau chemin (snapshot tweaks) + rétrocompat anciennes sessions.
-    if session.tweaks.previous_plan.is_some()
-        || !session.tweaks.stopped_services.is_empty()
-        || session.tweaks.visual_fx.is_some()
-        || session.tweaks.transparency.is_some()
-        || session.tweaks.game_dvr_app.is_some()
-        || session.tweaks.toast_enabled.is_some()
-        || session.tweaks.widgets_taskbar.is_some()
-        || session.tweaks.background_apps.is_some()
-        || session.tweaks.system_responsiveness.is_some()
-    {
-        tweaks::restore(&session.tweaks);
-    } else {
-        for s in &session.stopped_services {
-            run("sc", &["start", s]);
-        }
+    tweaks::restore(&session.tweaks);
+    if session.tweaks.previous_plan.is_none() {
         if let Some(plan) = &session.previous_plan {
             run("powercfg", &["/setactive", plan]);
+        }
+        if session.tweaks.stopped_services.is_empty() {
+            for s in &session.stopped_services {
+                run("sc", &["start", s]);
+            }
         }
     }
 

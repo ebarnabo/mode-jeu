@@ -1,7 +1,7 @@
 //! Métriques légères : échantillonnage en arrière-plan, zéro spawn coûteux en hot path.
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 use sysinfo::{Components, CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
@@ -96,6 +96,8 @@ static MONITOR: Mutex<Option<MonitorRect>> = Mutex::new(None);
 static STARTED: AtomicBool = AtomicBool::new(false);
 /// 0 = off, 1 = light (CPU/RAM), 2 = full (GPU/temps/FPS).
 static SAMPLE_MODE: AtomicU8 = AtomicU8::new(0);
+static PARK: Mutex<()> = Mutex::new(());
+static PARK_CV: Condvar = Condvar::new();
 pub const SAMPLE_OFF: u8 = 0;
 pub const SAMPLE_LIGHT: u8 = 1;
 pub const SAMPLE_FULL: u8 = 2;
@@ -112,6 +114,7 @@ pub fn set_sample_mode(mode: u8) {
     SAMPLE_MODE.store(mode, Ordering::SeqCst);
     if mode != SAMPLE_OFF {
         ensure_sampler();
+        PARK_CV.notify_one();
     }
 }
 
@@ -139,13 +142,16 @@ fn ensure_sampler() {
             let mut s = Sampler::new();
             loop {
                 let mode = SAMPLE_MODE.load(Ordering::Relaxed);
-                if mode != SAMPLE_OFF {
-                    tick(&mut s, mode);
-                    let wait = if mode == SAMPLE_LIGHT { 4000 } else { 2000 };
-                    std::thread::sleep(Duration::from_millis(wait));
-                } else {
-                    std::thread::sleep(Duration::from_millis(8000));
+                if mode == SAMPLE_OFF {
+                    let guard = PARK.lock().unwrap_or_else(|e| e.into_inner());
+                    if SAMPLE_MODE.load(Ordering::Relaxed) == SAMPLE_OFF {
+                        drop(PARK_CV.wait(guard).unwrap_or_else(|e| e.into_inner()));
+                    }
+                    continue;
                 }
+                tick(&mut s, mode);
+                let wait = if mode == SAMPLE_LIGHT { 5000 } else { 2500 };
+                std::thread::sleep(Duration::from_millis(wait));
             }
         })
         .ok();
@@ -162,7 +168,7 @@ fn tick(s: &mut Sampler, mode: u8) {
         s.last_cpu = now;
     }
 
-    if full && now.duration_since(s.last_gpu) >= Duration::from_secs(4) {
+    if full && now.duration_since(s.last_gpu) >= Duration::from_secs(6) {
         let sample = query_gpu(s);
         s.gpu_pct = sample.util;
         s.gpu_temp = sample.temp;

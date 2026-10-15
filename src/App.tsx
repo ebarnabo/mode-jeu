@@ -74,6 +74,7 @@ type Config = {
   disable_widgets: boolean;
   disable_background_apps: boolean;
   mmcss_gaming: boolean;
+  cpu_unpark: boolean;
   min_close_mb: number;
   reopen_closed_apps: boolean;
   watch_games: boolean;
@@ -333,6 +334,7 @@ export default function App() {
       disable_transparency: true,
       disable_background_apps: true,
       mmcss_gaming: true,
+      cpu_unpark: true,
       stop_services: true,
       min_close_mb: 40,
     });
@@ -1146,6 +1148,12 @@ export default function App() {
                   hint="Plus de CPU/réseau pour le jeu (admin recommandé)."
                   checked={config.mmcss_gaming}
                   onChange={(v) => patch({ mmcss_gaming: v })}
+                />
+                <OptionRow
+                  label="CPU à 100 % pendant la session"
+                  hint="Cœurs déparkés, USB sans suspend. Annulé à la sortie."
+                  checked={config.cpu_unpark !== false}
+                  onChange={(v) => patch({ cpu_unpark: v })}
                 />
                 <OptionRow
                   label="Couper les notifications toast"

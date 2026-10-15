@@ -22,6 +22,12 @@ pub struct TweaksSnapshot {
     pub background_apps: Option<u32>,
     pub system_responsiveness: Option<u32>,
     pub network_throttling: Option<u32>,
+    pub games_gpu_priority: Option<u32>,
+    pub games_priority: Option<u32>,
+    pub cpu_min_ac: Option<u32>,
+    pub cpu_min_dc: Option<u32>,
+    pub usb_suspend_ac: Option<u32>,
+    pub usb_suspend_dc: Option<u32>,
     pub stopped_services: Vec<String>,
 }
 
@@ -99,6 +105,7 @@ pub struct TweakFlags {
     pub disable_widgets: bool,
     pub disable_background_apps: bool,
     pub mmcss_gaming: bool,
+    pub cpu_unpark: bool,
     pub stop_services: bool,
     pub services: Vec<String>,
 }
@@ -180,6 +187,44 @@ pub fn apply(flags: &TweakFlags) -> TweaksSnapshot {
         snap.network_throttling = reg_query_dword(MM, "NetworkThrottlingIndex");
         reg_set_dword(MM, "SystemResponsiveness", 0);
         reg_set_dword(MM, "NetworkThrottlingIndex", 0xffff_ffff);
+        const GAMES: &str =
+            r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games";
+        snap.games_gpu_priority = reg_query_dword(GAMES, "GPU Priority");
+        snap.games_priority = reg_query_dword(GAMES, "Priority");
+        reg_set_dword(GAMES, "GPU Priority", 8);
+        reg_set_dword(GAMES, "Priority", 6);
+        let _ = run(
+            "reg",
+            &[
+                "add",
+                GAMES,
+                "/v",
+                "Scheduling Category",
+                "/t",
+                "REG_SZ",
+                "/d",
+                "High",
+                "/f",
+            ],
+        );
+        let _ = run(
+            "reg",
+            &[
+                "add",
+                GAMES,
+                "/v",
+                "SFIO Priority",
+                "/t",
+                "REG_SZ",
+                "/d",
+                "High",
+                "/f",
+            ],
+        );
+    }
+
+    if flags.cpu_unpark {
+        apply_cpu_unpark(&mut snap);
     }
 
     if flags.stop_services {
@@ -194,6 +239,9 @@ pub fn apply(flags: &TweakFlags) -> TweaksSnapshot {
 }
 
 pub fn restore(snap: &TweaksSnapshot) {
+    // Remettre le schéma de jeu avant de changer de plan, sinon High Performance reste modifié.
+    restore_cpu_unpark(snap);
+
     if let Some(plan) = &snap.previous_plan {
         run("powercfg", &["/setactive", plan]);
     }
@@ -264,8 +312,117 @@ pub fn restore(snap: &TweaksSnapshot) {
             v,
         );
     }
+    const GAMES: &str =
+        r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games";
+    if let Some(v) = snap.games_gpu_priority {
+        reg_set_dword(GAMES, "GPU Priority", v);
+    }
+    if let Some(v) = snap.games_priority {
+        reg_set_dword(GAMES, "Priority", v);
+    }
 
     for s in &snap.stopped_services {
         run("sc", &["start", s]);
+    }
+}
+
+fn powercfg_ac_index(sub: &str, setting: &str) -> Option<u32> {
+    parse_power_index(&run("powercfg", &["/query", "SCHEME_CURRENT", sub, setting])?, true)
+}
+
+fn powercfg_dc_index(sub: &str, setting: &str) -> Option<u32> {
+    parse_power_index(&run("powercfg", &["/query", "SCHEME_CURRENT", sub, setting])?, false)
+}
+
+fn parse_power_index(out: &str, ac: bool) -> Option<u32> {
+    let mut hit = false;
+    for line in out.lines() {
+        let l = line.to_lowercase();
+        if ac {
+            if l.contains("current ac") || l.contains("alimentation ca") || l.contains("alimentation ac")
+            {
+                hit = true;
+            }
+        } else if l.contains("current dc")
+            || l.contains("alimentation cc")
+            || l.contains("alimentation dc")
+        {
+            hit = true;
+        }
+        if hit {
+            if let Some(tok) = line
+                .split_whitespace()
+                .rev()
+                .find(|t| t.len() > 2 && (t.starts_with("0x") || t.starts_with("0X")))
+            {
+                return u32::from_str_radix(&tok[2..], 16).ok();
+            }
+        }
+    }
+    None
+}
+
+fn set_power_index(ac: bool, sub: &str, setting: &str, value: u32) {
+    let flag = if ac {
+        "/setacvalueindex"
+    } else {
+        "/setdcvalueindex"
+    };
+    run(
+        "powercfg",
+        &[flag, "SCHEME_CURRENT", sub, setting, &value.to_string()],
+    );
+}
+
+fn apply_cpu_unpark(snap: &mut TweaksSnapshot) {
+    const SUB_CPU: &str = "SUB_PROCESSOR";
+    const MIN: &str = "PROCTHROTTLEMIN";
+    const SUB_USB: &str = "SUB_USB";
+    const USB: &str = "USBSELECTSUSPEND";
+
+    snap.cpu_min_ac = powercfg_ac_index(SUB_CPU, MIN);
+    snap.cpu_min_dc = powercfg_dc_index(SUB_CPU, MIN);
+    snap.usb_suspend_ac = powercfg_ac_index(SUB_USB, USB);
+    snap.usb_suspend_dc = powercfg_dc_index(SUB_USB, USB);
+
+    if snap.cpu_min_ac.is_some() {
+        set_power_index(true, SUB_CPU, MIN, 100);
+    }
+    if snap.cpu_min_dc.is_some() {
+        set_power_index(false, SUB_CPU, MIN, 100);
+    }
+    if snap.usb_suspend_ac.is_some() {
+        set_power_index(true, SUB_USB, USB, 0);
+    }
+    if snap.usb_suspend_dc.is_some() {
+        set_power_index(false, SUB_USB, USB, 0);
+    }
+    run("powercfg", &["/setactive", "SCHEME_CURRENT"]);
+}
+
+fn restore_cpu_unpark(snap: &TweaksSnapshot) {
+    const SUB_CPU: &str = "SUB_PROCESSOR";
+    const MIN: &str = "PROCTHROTTLEMIN";
+    const SUB_USB: &str = "SUB_USB";
+    const USB: &str = "USBSELECTSUSPEND";
+    let mut changed = false;
+    if let Some(v) = snap.cpu_min_ac {
+        set_power_index(true, SUB_CPU, MIN, v);
+        changed = true;
+    }
+    if let Some(v) = snap.cpu_min_dc {
+        set_power_index(false, SUB_CPU, MIN, v);
+        changed = true;
+    }
+    if let Some(v) = snap.usb_suspend_ac {
+        set_power_index(true, SUB_USB, USB, v);
+        changed = true;
+    }
+    if let Some(v) = snap.usb_suspend_dc {
+        set_power_index(false, SUB_USB, USB, v);
+        changed = true;
+    }
+    if changed {
+        run("powercfg", &["/setactive", "SCHEME_CURRENT"]);
     }
 }

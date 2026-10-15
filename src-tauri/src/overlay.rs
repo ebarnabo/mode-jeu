@@ -9,7 +9,7 @@ fn default_true() -> bool {
     true
 }
 fn default_interval() -> u32 {
-    2000
+    3000
 }
 fn default_opacity() -> u8 {
     88
@@ -77,7 +77,7 @@ impl Default for OverlayConfig {
             notch_monitor_name: None,
             opacity: 88,
             position: "top-right".into(),
-            interval_ms: 2000,
+            interval_ms: 3000,
             hidden: false,
         }
     }
