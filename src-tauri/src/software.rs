@@ -1,6 +1,6 @@
 //! Inventaire des logiciels Windows, désinstallation propre, analyse des process ouverts.
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -30,6 +30,12 @@ pub struct InstalledApp {
     pub can_uninstall: bool,
     pub locked: bool,
     pub source: String,
+    /// Dossier à ouvrir, s’il est connu et n’est pas une racine générique.
+    pub folder: Option<String>,
+    /// Nom court du groupe si une autre entrée recouvre celle-ci. Vide sinon.
+    pub duplicate_group: String,
+    /// Autres noms du même groupe.
+    pub duplicate_with: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -129,6 +135,7 @@ fn read_key(hive_label: &str, parent: &RegKey, key_name: &str, wow: bool) -> Opt
     };
     let locked = locked_install(&name, &publisher, &location, no_remove);
     let can = !locked && (!uninstall.trim().is_empty() || !quiet.trim().is_empty());
+    let folder = guess_folder(&location, &uninstall);
     Some(InstalledApp {
         id: format!("{hive_label}|{key_name}|{}", if wow { "32" } else { "64" }),
         name,
@@ -141,6 +148,9 @@ fn read_key(hive_label: &str, parent: &RegKey, key_name: &str, wow: bool) -> Opt
         can_uninstall: can,
         locked,
         source: if wow { "Win32" } else { "Win64" }.into(),
+        folder,
+        duplicate_group: String::new(),
+        duplicate_with: Vec::new(),
     })
 }
 
@@ -151,6 +161,166 @@ fn nonempty(s: String) -> Option<String> {
     } else {
         Some(t)
     }
+}
+
+fn is_generic_dir(path: &str) -> bool {
+    let p = path.trim().trim_end_matches(['\\', '/']).to_lowercase();
+    if p.len() <= 3 {
+        return true;
+    }
+    p.ends_with(r":\program files")
+        || p.ends_with(r":\program files (x86)")
+        || p.ends_with(r":\windows")
+        || p.ends_with(r":\windows\system32")
+        || p.ends_with(r":\users")
+}
+
+/// Clé de recouvrement : même produit, en ignorant l’architecture et un numéro de version final.
+fn duplicate_key(name: &str) -> String {
+    let mut n = name.to_lowercase();
+    for ch in ['®', '™', '©', '(', ')', '[', ']'] {
+        n = n.replace(ch, " ");
+    }
+    for tag in [
+        "64-bit", "32-bit", "64 bits", "32 bits", "x64", "x86", "win64", "win32",
+    ] {
+        n = n.replace(tag, " ");
+    }
+    let mut parts: Vec<&str> = n.split_whitespace().collect();
+    if let Some(last) = parts.last().copied() {
+        let t = last.trim_start_matches('v');
+        let dotted = t.contains('.') && t.chars().all(|c| c.is_ascii_digit() || c == '.');
+        if dotted {
+            parts.pop();
+        }
+    }
+    parts.join(" ")
+}
+
+fn guess_folder(location: &str, uninstall: &str) -> Option<String> {
+    let loc = location.trim().trim_matches('"');
+    if !loc.is_empty() {
+        let p = Path::new(loc);
+        if p.is_dir() && !is_generic_dir(loc) {
+            return Some(p.to_string_lossy().trim_end_matches(['\\', '/']).to_string());
+        }
+        if p.is_file() {
+            if let Some(parent) = p.parent() {
+                let s = parent.to_string_lossy();
+                if parent.is_dir() && !is_generic_dir(&s) {
+                    return Some(s.trim_end_matches(['\\', '/']).to_string());
+                }
+            }
+        }
+    }
+    let u = uninstall.trim();
+    if u.is_empty() || u.to_lowercase().contains("msiexec") {
+        return None;
+    }
+    let (exe, _, dir) = resolve_command(u).ok()?;
+    if exe.to_lowercase().contains("msiexec") {
+        return None;
+    }
+    let candidate = dir.unwrap_or_else(|| {
+        Path::new(&exe)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
+    if candidate.is_empty() || is_generic_dir(&candidate) || !Path::new(&candidate).is_dir() {
+        return None;
+    }
+    Some(candidate.trim_end_matches(['\\', '/']).to_string())
+}
+
+fn find_root(parent: &mut [usize], mut i: usize) -> usize {
+    while parent[i] != i {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+    }
+    i
+}
+
+fn union_root(parent: &mut [usize], a: usize, b: usize) {
+    let ra = find_root(parent, a);
+    let rb = find_root(parent, b);
+    if ra != rb {
+        parent[rb] = ra;
+    }
+}
+
+fn annotate_duplicates(apps: &mut [InstalledApp]) {
+    let n = apps.len();
+    if n < 2 {
+        return;
+    }
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut by_key: HashMap<String, usize> = HashMap::new();
+    let mut by_folder: HashMap<String, usize> = HashMap::new();
+    for i in 0..n {
+        let key = duplicate_key(&apps[i].name);
+        if key.chars().count() >= 3 {
+            if let Some(j) = by_key.get(&key).copied() {
+                union_root(&mut parent, i, j);
+            } else {
+                by_key.insert(key, i);
+            }
+        }
+        if let Some(folder) = &apps[i].folder {
+            let f = folder.trim_end_matches(['\\', '/']).to_lowercase();
+            if !is_generic_dir(&f) {
+                if let Some(j) = by_folder.get(&f).copied() {
+                    union_root(&mut parent, i, j);
+                } else {
+                    by_folder.insert(f, i);
+                }
+            }
+        }
+    }
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..n {
+        let root = find_root(&mut parent, i);
+        groups.entry(root).or_default().push(i);
+    }
+    for members in groups.values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let label = members
+            .iter()
+            .map(|&i| apps[i].name.clone())
+            .min_by_key(|s| s.chars().count())
+            .unwrap_or_default();
+        for &i in members {
+            apps[i].duplicate_group = label.clone();
+            apps[i].duplicate_with = members
+                .iter()
+                .filter(|&&j| j != i)
+                .map(|&j| apps[j].name.clone())
+                .collect();
+        }
+    }
+}
+
+pub fn open_install_folder(id: &str) -> Result<(), String> {
+    let apps = list_installed();
+    let app = apps
+        .iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| "Logiciel introuvable.".to_string())?;
+    let folder = app
+        .folder
+        .clone()
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| "Dossier d’installation inconnu.".to_string())?;
+    if !Path::new(&folder).is_dir() {
+        return Err("Ce dossier n’existe plus.".into());
+    }
+    std::process::Command::new("explorer")
+        .arg(&folder)
+        .spawn()
+        .map_err(|_| "Impossible d’ouvrir l’explorateur.".to_string())?;
+    Ok(())
 }
 
 fn collect_hive(hive: RegKey, label: &str) -> Vec<InstalledApp> {
@@ -179,9 +349,14 @@ pub fn list_installed() -> Vec<InstalledApp> {
     }
     let mut apps = collect_hive(hive_lm(), "HKLM");
     apps.extend(collect_hive(hive_cu(), "HKCU"));
-    let mut seen = HashSet::new();
-    apps.retain(|a| seen.insert(a.name.to_lowercase()));
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    annotate_duplicates(&mut apps);
+    apps.sort_by(|a, b| {
+        let ad = !a.duplicate_group.is_empty();
+        let bd = !b.duplicate_group.is_empty();
+        bd.cmp(&ad)
+            .then_with(|| a.duplicate_group.to_lowercase().cmp(&b.duplicate_group.to_lowercase()))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     if let Ok(mut g) = INSTALLED_CACHE.lock() {
         *g = Some((now, apps.clone()));
     }
@@ -616,5 +791,61 @@ pub fn analyze(procs: &[ProcGroup]) -> AnalyzeReport {
         useful,
         keep,
         locked,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(name: &str, folder: Option<&str>) -> InstalledApp {
+        InstalledApp {
+            id: name.into(),
+            name: name.into(),
+            publisher: String::new(),
+            version: String::new(),
+            size_mb: 0,
+            location: folder.map(str::to_string),
+            uninstall: None,
+            quiet_uninstall: None,
+            can_uninstall: true,
+            locked: false,
+            source: "Win64".into(),
+            folder: folder.map(str::to_string),
+            duplicate_group: String::new(),
+            duplicate_with: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn same_product_ignores_architecture_and_version() {
+        assert_eq!(
+            duplicate_key("Google Chrome (64-bit)"),
+            duplicate_key("Google Chrome")
+        );
+        assert_eq!(duplicate_key("Discord 1.0.9152"), duplicate_key("Discord"));
+    }
+
+    #[test]
+    fn visual_c_years_stay_distinct() {
+        assert_ne!(
+            duplicate_key("Microsoft Visual C++ 2015"),
+            duplicate_key("Microsoft Visual C++ 2022")
+        );
+    }
+
+    #[test]
+    fn groups_shared_name_or_folder() {
+        let mut apps = vec![
+            sample("Steam", Some(r"C:\Program Files (x86)\Steam")),
+            sample("Steam (64-bit)", Some(r"D:\Games\Steam")),
+            sample("Autre", Some(r"C:\Program Files (x86)\Steam")),
+            sample("Notepad++", Some(r"C:\Program Files\Notepad++")),
+        ];
+        annotate_duplicates(&mut apps);
+        assert!(!apps[0].duplicate_group.is_empty());
+        assert_eq!(apps[0].duplicate_with.len(), 2);
+        assert!(!apps[2].duplicate_group.is_empty());
+        assert!(apps[3].duplicate_group.is_empty());
     }
 }

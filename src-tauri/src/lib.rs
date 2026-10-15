@@ -603,6 +603,11 @@ fn uninstall_app(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_install_folder(id: String) -> Result<(), String> {
+    software::open_install_folder(&id)
+}
+
+#[tauri::command]
 fn analyze_open_apps(app: AppHandle) -> software::AnalyzeReport {
     software::analyze(&scan(&load_config(&app), false))
 }
@@ -1154,6 +1159,7 @@ pub fn run_app() {
             list_games,
             list_installed,
             uninstall_app,
+            open_install_folder,
             analyze_open_apps,
             list_disks,
             optimize_volume,

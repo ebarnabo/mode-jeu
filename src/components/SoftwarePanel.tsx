@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Loader2, Search, Trash2, Lock, RefreshCw } from "lucide-react";
+import { Loader2, Search, Trash2, Lock, RefreshCw, FolderOpen, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DisksPanel } from "@/components/DisksPanel";
@@ -16,6 +16,9 @@ type InstalledApp = {
   can_uninstall: boolean;
   locked: boolean;
   source: string;
+  folder: string | null;
+  duplicate_group: string;
+  duplicate_with: string[];
 };
 
 type AdviceItem = {
@@ -49,6 +52,7 @@ export function SoftwarePanel() {
   const [pending, setPending] = useState<InstalledApp | AdviceItem | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const refreshInstalled = useCallback(async () => {
     setLoading(true);
@@ -72,9 +76,18 @@ export function SoftwarePanel() {
       (a) =>
         !q ||
         a.name.toLowerCase().includes(q) ||
-        a.publisher.toLowerCase().includes(q)
+        a.publisher.toLowerCase().includes(q) ||
+        a.duplicate_group.toLowerCase().includes(q)
     );
   }, [apps, query]);
+
+  const duplicateGroups = useMemo(() => {
+    const groups = new Set<string>();
+    for (const app of apps) {
+      if (app.duplicate_group) groups.add(app.duplicate_group);
+    }
+    return groups.size;
+  }, [apps]);
 
   const openView = (next: View) => {
     setView(next);
@@ -113,6 +126,26 @@ export function SoftwarePanel() {
       await refreshInstalled();
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const openFolder = async (app: InstalledApp) => {
+    setError(null);
+    try {
+      await invoke("open_install_folder", { id: app.id });
+    } catch (e) {
+      setError(readError(e, "Impossible d’ouvrir le dossier."));
+    }
+  };
+
+  const copyTriage = async () => {
+    setError(null);
+    try {
+      await navigator.clipboard.writeText(triagePrompt(apps));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError("La copie a échoué. Réessaie depuis la fenêtre Mode Jeu.");
     }
   };
 
@@ -165,6 +198,16 @@ export function SoftwarePanel() {
             <Button
               size="sm"
               variant="outline"
+              disabled={loading || apps.length === 0}
+              onClick={() => void copyTriage()}
+              className="shrink-0 border-brass/40 text-brass hover:border-brass/70"
+            >
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? "Copié" : "Copier le tri"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
               disabled={loading}
               onClick={() => void refreshInstalled()}
               aria-label="Actualiser"
@@ -172,6 +215,13 @@ export function SoftwarePanel() {
               <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
             </Button>
           </div>
+          {!loading && apps.length > 0 && (
+            <p className="px-1 text-[12px] leading-relaxed text-muted">
+              {duplicateGroups === 0
+                ? "Aucun doublon repéré. Le texte copié demande, pour chaque logiciel, s’il faut le garder ou le désinstaller."
+                : `${duplicateGroups} groupe${duplicateGroups > 1 ? "s" : ""} de doublons. Le texte copié les signale : tu choisis laquelle garder.`}
+            </p>
+          )}
           <div className="overflow-hidden rounded-2xl border border-line bg-surface/60">
             {loading ? (
               <div className="flex justify-center py-12">
@@ -197,13 +247,35 @@ export function SoftwarePanel() {
                           Protégé
                         </span>
                       )}
+                      {a.duplicate_group && (
+                        <span className="rounded-md bg-brass/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brass">
+                          Doublon
+                        </span>
+                      )}
                     </div>
                     <p className="mt-0.5 truncate text-xs text-muted">
                       {a.publisher || "Éditeur inconnu"}
                       {a.version ? ` · ${a.version}` : ""}
                       {a.size_mb > 0 ? ` · ${a.size_mb} Mo` : ""}
                     </p>
+                    {a.duplicate_with.length > 0 && (
+                      <p className="mt-0.5 truncate text-[11px] text-brass/80">
+                        Aussi : {a.duplicate_with.slice(0, 2).join(", ")}
+                        {a.duplicate_with.length > 2 ? ` +${a.duplicate_with.length - 2}` : ""}
+                      </p>
+                    )}
                   </div>
+                  {a.folder && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Ouvrir le dossier de ${a.name}`}
+                      title="Ouvrir le dossier d’installation"
+                      onClick={() => void openFolder(a)}
+                    >
+                      <FolderOpen className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
                   {a.can_uninstall ? (
                     <Button
                       size="sm"
@@ -308,6 +380,52 @@ export function SoftwarePanel() {
       )}
     </section>
   );
+}
+
+function readError(e: unknown, fallback: string) {
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object" && "message" in e) return String((e as { message: unknown }).message);
+  return fallback;
+}
+
+function triagePrompt(apps: InstalledApp[]) {
+  const groups = new Map<string, string[]>();
+  for (const app of apps) {
+    if (!app.duplicate_group) continue;
+    const names = groups.get(app.duplicate_group) ?? [];
+    names.push(app.name);
+    groups.set(app.duplicate_group, names);
+  }
+  const dupBlock =
+    groups.size === 0
+      ? "Aucun doublon détecté par l’app."
+      : [...groups.entries()]
+          .map(([group, names]) => `• ${group} : ${names.join(" ; ")}`)
+          .join("\n");
+  const lines = apps.map((app) => {
+    const size = app.size_mb > 0 ? `${app.size_mb} Mo` : "taille inconnue";
+    const folder = app.folder ?? "dossier inconnu";
+    const dup = app.duplicate_group
+      ? ` | DOUBLON « ${app.duplicate_group} » (${app.duplicate_with.length + 1} entrées)`
+      : "";
+    const locked = app.locked ? " | protégé, ne pas désinstaller" : "";
+    return `- ${app.name} | ${app.publisher || "éditeur inconnu"} | ${app.version || "sans version"} | ${size} | ${app.source} | ${folder}${locked}${dup}`;
+  });
+  return `Tu tries les logiciels installés sur un PC Windows utilisé pour jouer. Pour CHAQUE logiciel, une seule action : Garder, Désinstaller, ou Doute.
+But : enlever l’inutile (essais, bloat, barres d’outils, vieux utilitaires) sans casser Windows, les pilotes, Steam, Epic, les anti-cheat, ni les jeux.
+
+Règles :
+- Une ligne « protégé » ne se désinstalle pas.
+- Les groupes DOUBLON sont le même logiciel en plusieurs entrées (32/64 bits, ou deux inscriptions). Dis pourquoi elles se recouvrent. Ne choisis pas laquelle garder : je trancherai.
+- En cas de doute : Doute, pas Désinstaller.
+
+Réponds en français, un tableau : Nom | Action | Pourquoi.
+
+Doublons détectés :
+${dupBlock}
+
+Logiciels (${apps.length}) :
+${lines.join("\n")}`;
 }
 
 function AdviceGroup({
