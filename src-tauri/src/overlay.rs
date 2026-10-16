@@ -119,6 +119,8 @@ static MAIN_BG: AtomicBool = AtomicBool::new(false);
 static NOTCH_SNOOZE: AtomicBool = AtomicBool::new(false);
 static MAIN_QUIET: AtomicBool = AtomicBool::new(false);
 static OVERLAY_QUIET: AtomicBool = AtomicBool::new(false);
+/// Masque les overlay le temps du menu tray / aperçu barre des tâches.
+static TRAY_YIELD: AtomicBool = AtomicBool::new(false);
 
 /// true si l’état a changé. Endort aussi le WebView principal : WebView2
 /// ne signale pas toujours `document.hidden` quand la fenêtre est minimisée.
@@ -309,11 +311,49 @@ pub fn get_metrics(app: &AppHandle, cfg: &OverlayConfig) -> Metrics {
     metrics::collect(resolve_game_rect(app, cfg))
 }
 
+fn each_overlay_win(app: &AppHandle, mut f: impl FnMut(&WebviewWindow)) {
+    if let Some(w) = app.get_webview_window("overlay") {
+        f(&w);
+    }
+    for i in 0..8 {
+        if let Some(w) = app.get_webview_window(&format!("notch-{i}")) {
+            f(&w);
+        }
+    }
+}
+
+/// Le WebView2 always-on-top se superpose au menu tray et aux aperçus.
+/// On le range le temps du clic droit, puis `refresh_overlay` le ramène.
+pub fn yield_for_native_menu(app: &AppHandle) {
+    TRAY_YIELD.store(true, Ordering::SeqCst);
+    each_overlay_win(app, |w| {
+        let _ = w.set_always_on_top(false);
+        let _ = w.hide();
+    });
+}
+
+pub fn restore_after_native_menu() {
+    TRAY_YIELD.store(false, Ordering::SeqCst);
+}
+
+fn decorate_overlay_window(win: &WebviewWindow) {
+    let _ = win.set_skip_taskbar(true);
+    let _ = win.set_title("");
+    #[cfg(windows)]
+    win32::decorate(win);
+}
+
 pub fn sync_overlay(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) {
     let Some(win) = app.get_webview_window("overlay") else {
         metrics::set_sample_mode(metrics::SAMPLE_OFF);
         return;
     };
+    if TRAY_YIELD.load(Ordering::Relaxed) {
+        let _ = win.hide();
+        sync_mirrors(app, cfg, false);
+        metrics::set_sample_mode(metrics::SAMPLE_OFF);
+        return;
+    }
     let notch = should_show_notch(app, cfg, game_active);
     let card = cfg.enabled && !cfg.hidden && (game_active || cfg.always) && !notch;
     if !notch && !card {
@@ -327,10 +367,11 @@ pub fn sync_overlay(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) {
     if let Err(e) = place_overlay(app, &win, cfg, notch) {
         eprintln!("overlay place: {e}");
     }
-    let _ = win.set_skip_taskbar(true);
+    decorate_overlay_window(&win);
     let _ = win.set_ignore_cursor_events(!notch);
     let _ = win.set_always_on_top(true);
     let _ = win.show();
+    decorate_overlay_window(&win);
     sync_mirrors(app, cfg, notch);
     metrics::set_sample_mode(if notch {
         metrics::SAMPLE_LIGHT
@@ -492,7 +533,8 @@ fn place_notch_at(
         _ => mon.x + (mon.width as i32 - width as i32) / 2,
     };
     let y = if pos.starts_with("bottom") {
-        mon.y + mon.height as i32 - height as i32
+        let taskbar = (48.0 * scale).round() as i32;
+        mon.y + mon.height as i32 - height as i32 - taskbar
     } else {
         mon.y
     };
@@ -520,6 +562,10 @@ fn create_notch_window(app: &AppHandle, label: &str) -> Option<WebviewWindow> {
         .additional_browser_args("--disable-background-networking --disable-component-update --disable-sync --disable-features=Translate,MediaRouter --mute-audio")
         .build()
         .ok()
+        .map(|w| {
+            decorate_overlay_window(&w);
+            w
+        })
 }
 
 fn sync_mirrors(app: &AppHandle, cfg: &OverlayConfig, notch: bool) {
@@ -543,8 +589,10 @@ fn sync_mirrors(app: &AppHandle, cfg: &OverlayConfig, notch: bool) {
             let (width, height) = notch_size(cfg, scale);
             if place_notch_at(&win, mon, &cfg.notch_position, width, height).is_ok() {
                 set_page_quiet(&win, false);
+                decorate_overlay_window(&win);
                 let _ = win.set_always_on_top(true);
                 let _ = win.show();
+                decorate_overlay_window(&win);
                 keep.push(label);
             }
         }
@@ -557,5 +605,81 @@ fn sync_mirrors(app: &AppHandle, cfg: &OverlayConfig, notch: bool) {
         if let Some(w) = app.get_webview_window(&label) {
             let _ = w.destroy();
         }
+    }
+}
+
+#[cfg(windows)]
+mod win32 {
+    use super::WebviewWindow;
+    use std::ffi::c_void;
+    use windows::core::w;
+    use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM, TRUE};
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_DISALLOW_PEEK, DWMWA_EXCLUDED_FROM_PEEK,
+    };
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+    use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumChildWindows, GetWindowLongPtrW, SetPropW, SetWindowLongPtrW, SetWindowPos,
+        GWL_EXSTYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+
+    fn hwnd_of(win: &WebviewWindow) -> Option<HWND> {
+        let raw = win.hwnd().ok()?;
+        Some(HWND(raw.0 as *mut c_void))
+    }
+
+    unsafe fn strip_taskbar(hwnd: HWND) {
+        let mut ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        ex |= WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize;
+        ex &= !(WS_EX_APPWINDOW.0 as isize);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
+        let _ = SetWindowPos(
+            hwnd,
+            HWND::default(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+        let _ = SetPropW(hwnd, w!("NonRudeHWND"), HANDLE(1usize as *mut c_void));
+        let exclude = TRUE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_EXCLUDED_FROM_PEEK,
+            &exclude as *const BOOL as *const c_void,
+            std::mem::size_of::<BOOL>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_DISALLOW_PEEK,
+            &exclude as *const BOOL as *const c_void,
+            std::mem::size_of::<BOOL>() as u32,
+        );
+    }
+
+    pub fn decorate(win: &WebviewWindow) {
+        let Some(hwnd) = hwnd_of(win) else {
+            return;
+        };
+        unsafe {
+            strip_taskbar(hwnd);
+            if let Ok(list) = CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_ALL) {
+                let _ = list.HrInit();
+                let _ = list.DeleteTab(hwnd);
+                let boxed = Box::new(list);
+                let ptr = Box::into_raw(boxed);
+                let _ = EnumChildWindows(hwnd, Some(delete_child_tab), LPARAM(ptr as isize));
+                drop(Box::from_raw(ptr));
+            }
+        }
+    }
+
+    unsafe extern "system" fn delete_child_tab(child: HWND, lparam: LPARAM) -> BOOL {
+        let list = &*(lparam.0 as *const ITaskbarList3);
+        let _ = list.DeleteTab(child);
+        TRUE
     }
 }

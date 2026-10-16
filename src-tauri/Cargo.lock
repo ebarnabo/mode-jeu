@@ -1987,7 +1987,7 @@ dependencies = [
 
 [[package]]
 name = "mode-jeu"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "drag",
  "serde",

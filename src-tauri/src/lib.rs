@@ -1123,16 +1123,31 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .tooltip("Mode Jeu")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "open" => show_main(app),
-            "overlay" => {
-                let _ = toggle_overlay_visibility(app.clone());
+        .on_menu_event(|app, event| {
+            overlay::restore_after_native_menu();
+            match event.id.as_ref() {
+                "open" => show_main(app),
+                "overlay" => {
+                    let _ = toggle_overlay_visibility(app.clone());
+                }
+                "quit" => quit_app(app),
+                _ => refresh_overlay(app),
             }
-            "quit" => quit_app(app),
-            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             match event {
+                TrayIconEvent::Click {
+                    button: MouseButton::Right,
+                    ..
+                } => {
+                    overlay::yield_for_native_menu(tray.app_handle());
+                    let app = tray.app_handle().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(3500));
+                        overlay::restore_after_native_menu();
+                        refresh_overlay(&app);
+                    });
+                }
                 TrayIconEvent::Click {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
@@ -1141,7 +1156,10 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 | TrayIconEvent::DoubleClick {
                     button: MouseButton::Left,
                     ..
-                } => show_main(tray.app_handle()),
+                } => {
+                    overlay::restore_after_native_menu();
+                    show_main(tray.app_handle());
+                }
                 _ => {}
             }
         });
@@ -1254,7 +1272,6 @@ pub fn run_app() {
             #[cfg(windows)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
-            // Overlay hors barre des tâches / aperçus (évite le glitch au clic droit).
             if let Some(w) = app.get_webview_window("overlay") {
                 let _ = w.set_skip_taskbar(true);
                 let _ = w.set_title("");
