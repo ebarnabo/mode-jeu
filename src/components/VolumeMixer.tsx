@@ -112,9 +112,7 @@ export function VolumeMixer({
       setApps(vols);
       setOutputs(outs);
       const active = outs.find((o) => o.default) ?? outs[0];
-      if (active) {
-        setOutputId((prev) => prev || active.id);
-      }
+      if (active) setOutputId(active.id);
     } catch {
       /* silencieux */
     } finally {
@@ -150,7 +148,15 @@ export function VolumeMixer({
         const active = outs.find((o) => o.default);
         if (active) setOutputId(active.id);
       })
-      .catch(() => {})
+      .catch(() => {
+        invoke<AudioOutput[]>("list_audio_outputs")
+          .then((outs) => {
+            setOutputs(outs);
+            const active = outs.find((o) => o.default);
+            if (active) setOutputId(active.id);
+          })
+          .catch(() => {});
+      })
       .finally(() => {
         switching.current = false;
       });

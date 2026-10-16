@@ -123,9 +123,9 @@ mod win {
     use windows::Win32::Foundation::{BOOL, CloseHandle, MAX_PATH};
     use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
     use windows::Win32::Media::Audio::{
-        eConsole, eMultimedia, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDevice,
-        IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator, AudioSessionStateExpired,
-        DEVICE_STATE_ACTIVE, ERole,
+        eCommunications, eConsole, eMultimedia, eRender, IAudioSessionControl2,
+        IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator, ISimpleAudioVolume,
+        MMDeviceEnumerator, AudioSessionStateExpired, DEVICE_STATE_ACTIVE, ERole,
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
@@ -137,13 +137,64 @@ mod win {
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     };
 
+    const CLSID_POLICY_CONFIG: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
+    const CLSID_POLICY_CONFIG_VISTA: GUID = GUID::from_u128(0x294935ce_f637_4e7c_a41b_ab255460b862);
+
+    #[allow(non_snake_case)]
+    #[repr(C)]
+    struct IPolicyConfig_Vtbl {
+        pub base__: IUnknown_Vtbl,
+        pub GetMixFormat: usize,
+        pub GetDeviceFormat: usize,
+        pub ResetDeviceFormat: usize,
+        pub SetDeviceFormat: usize,
+        pub GetProcessingPeriod: usize,
+        pub SetProcessingPeriod: usize,
+        pub GetShareMode: usize,
+        pub SetShareMode: usize,
+        pub GetPropertyValue: usize,
+        pub SetPropertyValue: usize,
+        pub SetDefaultEndpoint: unsafe extern "system" fn(*mut std::ffi::c_void, PCWSTR, ERole) -> HRESULT,
+        pub SetEndpointVisibility: usize,
+    }
+
     #[derive(Clone)]
     #[repr(transparent)]
     struct IPolicyConfig(IUnknown);
 
     unsafe impl Interface for IPolicyConfig {
-        type Vtable = IUnknown_Vtbl;
+        type Vtable = IPolicyConfig_Vtbl;
         const IID: GUID = GUID::from_u128(0xf8679f50_850a_41cf_9c72_430f290290c8);
+    }
+
+    #[allow(non_snake_case)]
+    #[repr(C)]
+    struct IPolicyConfigVista_Vtbl {
+        pub base__: IUnknown_Vtbl,
+        pub GetMixFormat: usize,
+        pub GetDeviceFormat: usize,
+        pub SetDeviceFormat: usize,
+        pub GetProcessingPeriod: usize,
+        pub SetProcessingPeriod: usize,
+        pub GetShareMode: usize,
+        pub SetShareMode: usize,
+        pub GetPropertyValue: usize,
+        pub SetPropertyValue: usize,
+        pub SetDefaultEndpoint: unsafe extern "system" fn(*mut std::ffi::c_void, PCWSTR, ERole) -> HRESULT,
+        pub SetEndpointVisibility: usize,
+    }
+
+    #[derive(Clone)]
+    #[repr(transparent)]
+    struct IPolicyConfigVista(IUnknown);
+
+    unsafe impl Interface for IPolicyConfigVista {
+        type Vtable = IPolicyConfigVista_Vtbl;
+        const IID: GUID = GUID::from_u128(0x568b9108_44bf_40b4_9006_86afe5b5a620);
+    }
+
+    fn is_device_id(id: &str) -> bool {
+        id.starts_with('{')
     }
 
     /// WebView2 a déjà initialisé COM en STA. Ne jamais abandonner si le mode diffère.
@@ -276,27 +327,52 @@ mod win {
         list
     }
 
-    pub fn set_default_output(id: &str) -> Result<(), String> {
-        ensure_com();
-        unsafe {
-            static CLSID: GUID = GUID::from_u128(0x870af692_07ab_4eb8_a534_456eb4095513);
-            let policy: IPolicyConfig =
-                CoCreateInstance(&CLSID, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
-            let raw = policy.0.as_raw() as *mut *mut std::ffi::c_void;
-            let vtable = *(*raw as *const *const usize);
-            let set_default: unsafe extern "system" fn(
-                *mut std::ffi::c_void,
-                PCWSTR,
-                ERole,
-            ) -> HRESULT = std::mem::transmute(*vtable.add(13));
-            let wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
-            for role in [eConsole, eMultimedia] {
-                set_default(*raw as *mut _, PCWSTR(wide.as_ptr()), role)
-                    .ok()
-                    .map_err(|e| e.to_string())?;
-            }
+    fn call_set_default(
+        set: unsafe extern "system" fn(*mut std::ffi::c_void, PCWSTR, ERole) -> HRESULT,
+        this: *mut std::ffi::c_void,
+        wide: &[u16],
+    ) -> Result<(), String> {
+        for role in [eConsole, eMultimedia, eCommunications] {
+            unsafe { set(this, PCWSTR(wide.as_ptr()), role) }
+                .ok()
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+
+    pub fn set_default_output(id: &str) -> Result<(), String> {
+        ensure_com();
+        let wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut last = "PolicyConfig introuvable".to_string();
+        unsafe {
+            for clsid in [CLSID_POLICY_CONFIG, CLSID_POLICY_CONFIG_VISTA] {
+                if let Ok(policy) = CoCreateInstance::<_, IPolicyConfig>(&clsid, None, CLSCTX_ALL) {
+                    let this = Interface::as_raw(&policy);
+                    let vt = &**(this as *const *const IPolicyConfig_Vtbl);
+                    match call_set_default(vt.SetDefaultEndpoint, this, &wide) {
+                        Ok(()) => {
+                            std::thread::sleep(std::time::Duration::from_millis(80));
+                            return Ok(());
+                        }
+                        Err(e) => last = e,
+                    }
+                }
+                if let Ok(policy) =
+                    CoCreateInstance::<_, IPolicyConfigVista>(&clsid, None, CLSCTX_ALL)
+                {
+                    let this = Interface::as_raw(&policy);
+                    let vt = &**(this as *const *const IPolicyConfigVista_Vtbl);
+                    match call_set_default(vt.SetDefaultEndpoint, this, &wide) {
+                        Ok(()) => {
+                            std::thread::sleep(std::time::Duration::from_millis(80));
+                            return Ok(());
+                        }
+                        Err(e) => last = e,
+                    }
+                }
+            }
+        }
+        Err(last)
     }
 
     struct Raw {
@@ -378,7 +454,9 @@ mod win {
             if let Some(row) = device_row(&def) {
                 raw.push(row);
             }
-            session_rows(&def, &mut raw);
+        }
+        for dev in enum_render_devices(&enumr) {
+            session_rows(&dev, &mut raw);
         }
         let mut by: HashMap<String, (String, f32, bool, u32, &'static str)> = HashMap::new();
         for s in raw {
@@ -472,14 +550,14 @@ mod win {
             }
             return;
         }
-        if want.contains('.') || want.starts_with('{') {
+        if is_device_id(&want) {
             if let Some(dev) = find_device(&enumr, &want) {
                 set_device(&dev, volume, muted);
             }
             return;
         }
-        if let Some(def) = default_device(&enumr) {
-            set_session(&def, &want, volume, muted);
+        for dev in enum_render_devices(&enumr) {
+            set_session(&dev, &want, volume, muted);
         }
     }
 }
