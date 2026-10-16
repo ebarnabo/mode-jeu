@@ -13,6 +13,13 @@ pub struct AppVolume {
     pub kind: String,
 }
 
+#[derive(Serialize, Clone)]
+pub struct AudioOutput {
+    pub id: String,
+    pub name: String,
+    pub default: bool,
+}
+
 static LAST_COUNT: AtomicU32 = AtomicU32::new(0);
 static CACHE: Mutex<Option<(Instant, Vec<AppVolume>)>> = Mutex::new(None);
 
@@ -60,6 +67,31 @@ pub fn set_mute(id: &str, muted: bool) -> Vec<AppVolume> {
     list(true)
 }
 
+pub fn list_outputs() -> Vec<AudioOutput> {
+    #[cfg(windows)]
+    {
+        win::list_outputs()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
+pub fn set_default_output(id: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        win::set_default_output(id)?;
+        invalidate();
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = id;
+        Err("Windows uniquement".into())
+    }
+}
+
 fn enumerate() -> Vec<AppVolume> {
     #[cfg(windows)]
     {
@@ -84,22 +116,35 @@ fn apply(id: &str, volume: Option<f32>, muted: Option<bool>) {
 
 #[cfg(windows)]
 mod win {
-    use super::AppVolume;
-    use std::collections::HashMap;
-    use windows::core::{Interface, GUID, PWSTR};
+    use super::{AppVolume, AudioOutput};
+    use std::collections::{HashMap, HashSet};
+    use windows::core::{Interface, IUnknown_Vtbl, GUID, HRESULT, IUnknown, PCWSTR, PWSTR};
+    use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
     use windows::Win32::Foundation::{BOOL, CloseHandle, MAX_PATH};
     use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
     use windows::Win32::Media::Audio::{
-        eMultimedia, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDevice,
+        eConsole, eMultimedia, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDevice,
         IMMDeviceEnumerator, ISimpleAudioVolume, MMDeviceEnumerator, AudioSessionStateExpired,
-        DEVICE_STATE_ACTIVE,
+        DEVICE_STATE_ACTIVE, ERole,
     };
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+        STGM_READ,
     };
+    use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToBSTR};
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     };
+
+    #[derive(Clone)]
+    #[repr(transparent)]
+    struct IPolicyConfig(IUnknown);
+
+    unsafe impl Interface for IPolicyConfig {
+        type Vtable = IUnknown_Vtbl;
+        const IID: GUID = GUID::from_u128(0xf8679f50_850a_41cf_9c72_430f290290c8);
+    }
 
     /// WebView2 a déjà initialisé COM en STA. Ne jamais abandonner si le mode diffère.
     fn ensure_com() {
@@ -156,22 +201,102 @@ mod win {
         unsafe { enumr.GetDefaultAudioEndpoint(eRender, eMultimedia).ok() }
     }
 
-    fn collect_devices(enumr: &IMMDeviceEnumerator) -> Vec<IMMDevice> {
-        let mut out = Vec::new();
-        if let Some(def) = default_device(enumr) {
-            out.push(def);
+    fn device_id(dev: &IMMDevice) -> Option<String> {
+        unsafe {
+            let id = dev.GetId().ok()?;
+            let s = id.to_string().ok()?;
+            CoTaskMemFree(Some(id.0 as _));
+            Some(s)
         }
+    }
+
+    fn friendly_name(dev: &IMMDevice) -> Option<String> {
+        unsafe {
+            let store: IPropertyStore = dev.OpenPropertyStore(STGM_READ).ok()?;
+            let mut var = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
+            let name = PropVariantToBSTR(&var).ok().map(|b| b.to_string());
+            let _ = PropVariantClear(&mut var);
+            name
+        }
+    }
+
+    fn enum_render_devices(enumr: &IMMDeviceEnumerator) -> Vec<IMMDevice> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
         unsafe {
             if let Ok(col) = enumr.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE) {
                 let n = col.GetCount().unwrap_or(0);
                 for i in 0..n {
                     if let Ok(dev) = col.Item(i) {
-                        out.push(dev);
+                        if let Some(id) = device_id(&dev) {
+                            if seen.insert(id) {
+                                out.push(dev);
+                            }
+                        }
                     }
                 }
             }
         }
         out
+    }
+
+    fn find_device(enumr: &IMMDeviceEnumerator, want: &str) -> Option<IMMDevice> {
+        let want = want.to_lowercase();
+        for dev in enum_render_devices(enumr) {
+            if device_id(&dev).map(|id| id.to_lowercase() == want).unwrap_or(false) {
+                return Some(dev);
+            }
+        }
+        None
+    }
+
+    pub fn list_outputs() -> Vec<AudioOutput> {
+        ensure_com();
+        let Some(enumr) = enumerator() else {
+            return Vec::new();
+        };
+        let default_id = default_device(&enumr).and_then(|d| device_id(&d));
+        let mut list: Vec<AudioOutput> = enum_render_devices(&enumr)
+            .into_iter()
+            .filter_map(|dev| {
+                let id = device_id(&dev)?;
+                let name = friendly_name(&dev).unwrap_or_else(|| "Sortie".into());
+                Some(AudioOutput {
+                    default: default_id.as_ref() == Some(&id),
+                    id,
+                    name,
+                })
+            })
+            .collect();
+        list.sort_by(|a, b| {
+            b.default
+                .cmp(&a.default)
+                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        list
+    }
+
+    pub fn set_default_output(id: &str) -> Result<(), String> {
+        ensure_com();
+        unsafe {
+            static CLSID: GUID = GUID::from_u128(0x870af692_07ab_4eb8_a534_456eb4095513);
+            let policy: IPolicyConfig =
+                CoCreateInstance(&CLSID, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
+            let raw = policy.0.as_raw() as *mut *mut std::ffi::c_void;
+            let vtable = *(*raw as *const *const usize);
+            let set_default: unsafe extern "system" fn(
+                *mut std::ffi::c_void,
+                PCWSTR,
+                ERole,
+            ) -> HRESULT = std::mem::transmute(*vtable.add(13));
+            let wide: Vec<u16> = id.encode_utf16().chain(std::iter::once(0)).collect();
+            for role in [eConsole, eMultimedia] {
+                set_default(*raw as *mut _, PCWSTR(wide.as_ptr()), role)
+                    .ok()
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
     }
 
     struct Raw {
@@ -187,9 +312,11 @@ mod win {
             let vol: IAudioEndpointVolume = dev.Activate(CLSCTX_ALL, None).ok()?;
             let level = vol.GetMasterVolumeLevelScalar().ok()?;
             let muted = vol.GetMute().ok().map(|b| b.as_bool()).unwrap_or(false);
+            let id = device_id(dev)?;
+            let name = friendly_name(dev).unwrap_or_else(|| "Sortie".into());
             Some(Raw {
-                id: "@device".into(),
-                name: "Sortie".into(),
+                id,
+                name,
                 volume: level.clamp(0.0, 1.0),
                 muted,
                 kind: "device",
@@ -246,15 +373,12 @@ mod win {
         let Some(enumr) = enumerator() else {
             return Vec::new();
         };
-        let devices = collect_devices(&enumr);
         let mut raw = Vec::new();
-        if let Some(def) = devices.first() {
-            if let Some(row) = device_row(def) {
+        if let Some(def) = default_device(&enumr) {
+            if let Some(row) = device_row(&def) {
                 raw.push(row);
             }
-        }
-        for dev in &devices {
-            session_rows(dev, &mut raw);
+            session_rows(&def, &mut raw);
         }
         let mut by: HashMap<String, (String, f32, bool, u32, &'static str)> = HashMap::new();
         for s in raw {
@@ -342,15 +466,20 @@ mod win {
             return;
         };
         let want = id.to_lowercase();
-        let devices = collect_devices(&enumr);
         if want == "@device" {
-            if let Some(def) = devices.first() {
-                set_device(def, volume, muted);
+            if let Some(def) = default_device(&enumr) {
+                set_device(&def, volume, muted);
             }
             return;
         }
-        for dev in &devices {
-            set_session(dev, &want, volume, muted);
+        if want.contains('.') || want.starts_with('{') {
+            if let Some(dev) = find_device(&enumr, &want) {
+                set_device(&dev, volume, muted);
+            }
+            return;
+        }
+        if let Some(def) = default_device(&enumr) {
+            set_session(&def, &want, volume, muted);
         }
     }
 }

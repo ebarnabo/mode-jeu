@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Speaker, Volume2, VolumeX } from "lucide-react";
+import { ChevronDown, Speaker, Volume2, VolumeX } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type AppVolume = {
@@ -9,6 +9,12 @@ export type AppVolume = {
   volume: number;
   muted: boolean;
   kind?: string;
+};
+
+export type AudioOutput = {
+  id: string;
+  name: string;
+  default: boolean;
 };
 
 type Variant = "page" | "compact" | "flyout";
@@ -25,6 +31,60 @@ function fillStyle(volume: number, muted: boolean) {
   };
 }
 
+function OutputPicker({
+  outputs,
+  activeId,
+  mode,
+  onChange,
+}: {
+  outputs: AudioOutput[];
+  activeId: string;
+  mode: Variant;
+  onChange: (id: string) => void;
+}) {
+  if (outputs.length === 0) return null;
+  const active = outputs.find((o) => o.id === activeId) ?? outputs.find((o) => o.default) ?? outputs[0];
+
+  return (
+    <label
+      className={cn(
+        "relative flex min-w-0 items-center gap-2",
+        mode === "compact" && "mb-1 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1",
+        mode === "flyout" && "mb-2 rounded-xl border border-line bg-raised/80 px-2.5 py-2",
+        mode === "page" && "mb-3 rounded-xl border border-line bg-raised/60 px-3 py-2.5"
+      )}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <Speaker className={cn("shrink-0 text-brass", mode === "compact" ? "h-3 w-3" : "h-4 w-4")} />
+      <span
+        className={cn(
+          "shrink-0 font-semibold uppercase tracking-wide text-muted",
+          mode === "compact" ? "text-[9px]" : "text-[10px]"
+        )}
+      >
+        Sortie
+      </span>
+      <select
+        value={active?.id ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+        className={cn(
+          "min-w-0 flex-1 cursor-pointer appearance-none truncate bg-transparent font-medium text-paper outline-none",
+          mode === "compact" ? "text-[11px]" : "text-[13px]"
+        )}
+        aria-label="Choisir la sortie audio"
+      >
+        {outputs.map((o) => (
+          <option key={o.id} value={o.id} className="bg-surface text-paper">
+            {o.name}
+            {o.default ? " · actuelle" : ""}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className={cn("shrink-0 text-muted", mode === "compact" ? "h-3 w-3" : "h-4 w-4")} />
+    </label>
+  );
+}
+
 export function VolumeMixer({
   compact,
   variant,
@@ -34,15 +94,27 @@ export function VolumeMixer({
 }) {
   const mode: Variant = variant ?? (compact ? "compact" : "page");
   const [apps, setApps] = useState<AppVolume[]>([]);
+  const [outputs, setOutputs] = useState<AudioOutput[]>([]);
+  const [outputId, setOutputId] = useState("");
   const [loaded, setLoaded] = useState(false);
   const dragging = useRef<string | null>(null);
   const lastSend = useRef(0);
+  const switching = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (dragging.current) return;
+    if (dragging.current || switching.current) return;
     if (document.hidden) return;
     try {
-      setApps(await invoke<AppVolume[]>("list_app_volumes"));
+      const [vols, outs] = await Promise.all([
+        invoke<AppVolume[]>("list_app_volumes"),
+        invoke<AudioOutput[]>("list_audio_outputs"),
+      ]);
+      setApps(vols);
+      setOutputs(outs);
+      const active = outs.find((o) => o.default) ?? outs[0];
+      if (active) {
+        setOutputId((prev) => prev || active.id);
+      }
     } catch {
       /* silencieux */
     } finally {
@@ -63,6 +135,26 @@ export function VolumeMixer({
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [refresh, mode]);
+
+  const pickOutput = (id: string) => {
+    if (!id || id === outputId) return;
+    switching.current = true;
+    setOutputId(id);
+    invoke<AppVolume[]>("set_default_audio_output", { id })
+      .then((vols) => {
+        setApps(vols);
+        return invoke<AudioOutput[]>("list_audio_outputs");
+      })
+      .then((outs) => {
+        setOutputs(outs);
+        const active = outs.find((o) => o.default);
+        if (active) setOutputId(active.id);
+      })
+      .catch(() => {})
+      .finally(() => {
+        switching.current = false;
+      });
+  };
 
   const slide = (id: string, volume: number) => {
     dragging.current = id;
@@ -89,7 +181,11 @@ export function VolumeMixer({
   };
 
   const emptyCopy =
-    mode === "compact" ? "Rien ne joue." : "Aucune app ne joue de son.";
+    mode === "compact" ? "Rien ne joue." : "Aucune app ne joue de son sur cette sortie.";
+
+  const picker = (
+    <OutputPicker outputs={outputs} activeId={outputId} mode={mode} onChange={pickOutput} />
+  );
 
   const body =
     !loaded ? (
@@ -208,7 +304,14 @@ export function VolumeMixer({
       </ul>
     );
 
-  if (mode === "compact") return body;
+  if (mode === "compact") {
+    return (
+      <div className="min-w-0">
+        {picker}
+        {body}
+      </div>
+    );
+  }
 
   if (mode === "flyout") {
     return (
@@ -217,6 +320,7 @@ export function VolumeMixer({
           <Speaker className="h-4 w-4 text-brass" />
           <h1 className="font-display text-[15px] font-semibold tracking-tight text-paper">Son</h1>
         </header>
+        {picker}
         {body}
       </div>
     );
@@ -226,9 +330,12 @@ export function VolumeMixer({
     <section>
       <h2 className="font-display text-lg font-semibold text-paper">Son</h2>
       <p className="mt-1 text-[13px] text-muted">
-        Volume réel de la sortie et de chaque app. Le mute garde le niveau.
+        Sortie Windows, volume maître et apps sur la sortie active. Le mute garde le niveau.
       </p>
-      <div className="mt-4 overflow-hidden rounded-2xl border border-line bg-surface/60">{body}</div>
+      <div className="mt-4 overflow-hidden rounded-2xl border border-line bg-surface/60">
+        <div className="border-b border-line/80 px-4 py-3">{picker}</div>
+        {body}
+      </div>
     </section>
   );
 }

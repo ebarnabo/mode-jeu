@@ -939,6 +939,20 @@ fn set_app_mute(id: String, muted: bool) -> Vec<mixer::AppVolume> {
     mixer::set_mute(&id, muted)
 }
 
+#[tauri::command]
+fn list_audio_outputs() -> Vec<mixer::AudioOutput> {
+    mixer::list_outputs()
+}
+
+#[tauri::command]
+fn set_default_audio_output(app: AppHandle, id: String) -> Result<Vec<mixer::AppVolume>, String> {
+    mixer::set_default_output(&id)?;
+    if overlay::mixer_row() {
+        refresh_overlay(&app);
+    }
+    Ok(mixer::list(true))
+}
+
 fn mixer_flyout_open(app: &AppHandle) -> bool {
     app.get_webview_window("mixer")
         .and_then(|w| w.is_visible().ok())
@@ -1506,6 +1520,8 @@ pub fn run_app() {
             list_app_volumes,
             set_app_volume,
             set_app_mute,
+            list_audio_outputs,
+            set_default_audio_output,
             toggle_mixer_flyout,
             hide_mixer_flyout,
             list_music_apps,

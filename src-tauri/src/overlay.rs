@@ -494,7 +494,7 @@ fn notch_size(cfg: &OverlayConfig, scale: f64) -> (u32, u32) {
         logical = if cfg.notch_show_mascot { 52.0 } else { 92.0 };
     }
     let mixer_h = if mixer {
-        16.0 + (crate::mixer::last_count().clamp(1, 6) as f64) * 40.0
+        52.0 + (crate::mixer::last_count().clamp(1, 6) as f64) * 40.0
     } else {
         0.0
     };
