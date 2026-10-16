@@ -198,13 +198,22 @@ export default function App() {
 
   useEffect(() => {
     if (busy || (tab !== "apps" && tab !== "session")) return;
-    invoke<ProcGroup[]>("list_processes").then(setProcs).catch(() => {});
-    invoke<{ ram_total_gb: number; ram_used_gb: number }>("get_metrics")
-      .then((m) => {
-        setMachineRamGb(m.ram_total_gb > 0 ? m.ram_total_gb : null);
-        setUsedRamGb(m.ram_used_gb > 0 ? m.ram_used_gb : null);
-      })
-      .catch(() => {});
+    const load = (fresh: boolean) => {
+      invoke<ProcGroup[]>("list_processes", { fresh }).then(setProcs).catch(() => {});
+      invoke<{ ram_total_gb: number; ram_used_gb: number }>("get_metrics")
+        .then((m) => {
+          setMachineRamGb(m.ram_total_gb > 0 ? m.ram_total_gb : null);
+          setUsedRamGb(m.ram_used_gb > 0 ? m.ram_used_gb : null);
+        })
+        .catch(() => {});
+    };
+    load(true);
+    if (tab !== "apps") return;
+    const id = window.setInterval(() => {
+      if (document.hidden) return;
+      load(false);
+    }, 8000);
+    return () => window.clearInterval(id);
   }, [tab, busy]);
 
   useEffect(() => {
@@ -457,7 +466,6 @@ export default function App() {
       );
     }
     return [...list].sort((a, b) => {
-      if (a.kept !== b.kept) return a.kept ? -1 : 1;
       if (appSort === "cpu") {
         return b.cpu_pct - a.cpu_pct || b.memory_mb - a.memory_mb;
       }
@@ -716,7 +724,12 @@ export default function App() {
                   <button
                     key={id}
                     type="button"
-                    onClick={() => setAppSort(id)}
+                    onClick={() => {
+                      setAppSort(id);
+                      invoke<ProcGroup[]>("list_processes", { fresh: true })
+                        .then(setProcs)
+                        .catch(() => {});
+                    }}
                     className={cn(
                       "rounded-lg px-3 py-2 text-[12px] font-semibold transition-colors",
                       appSort === id
@@ -759,6 +772,8 @@ export default function App() {
               ) : (
                 visible.map((p, i) => {
                   const isSel = selected.has(p.key);
+                  const hogRam = isRamHog(p, machineRamGb);
+                  const hogCpu = isCpuHog(p);
                   return (
                     <div
                       key={p.key}
@@ -791,6 +806,16 @@ export default function App() {
                           {p.kept && (
                             <span className="rounded-md bg-brass/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brass">
                               Gardée
+                            </span>
+                          )}
+                          {hogRam && (
+                            <span className="rounded-md bg-[#E8A07A]/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#E8A07A]">
+                              Gourmand
+                            </span>
+                          )}
+                          {hogCpu && !hogRam && (
+                            <span className="rounded-md bg-brass/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brass">
+                              CPU
                             </span>
                           )}
                           {p.foreground && config.protect_foreground && (
@@ -1588,6 +1613,18 @@ function SessionBoard({
   );
 }
 
+function isRamHog(p: ProcGroup, machineGb: number | null) {
+  if (p.memory_mb >= 400) return true;
+  if (machineGb && machineGb > 0) {
+    return p.memory_mb / (machineGb * 1024) >= 0.08;
+  }
+  return false;
+}
+
+function isCpuHog(p: ProcGroup) {
+  return p.cpu_pct >= 15;
+}
+
 function formatRam(mb: number) {
   if (mb >= 1024) {
     const go = mb / 1024;
@@ -1690,7 +1727,14 @@ function RamBoard({
             return (
               <li key={p.key}>
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className="min-w-0 truncate text-[13px] font-medium text-paper">{p.name}</span>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-[13px] font-medium text-paper">{p.name}</span>
+                    {isRamHog(p, machineGb) && (
+                      <span className="shrink-0 rounded-md bg-[#E8A07A]/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#E8A07A]">
+                        Gourmand
+                      </span>
+                    )}
+                  </span>
                   <span className="shrink-0 font-mono text-[13px] font-semibold tabular-nums text-paper">
                     {formatRam(p.memory_mb)}
                     {pct != null && (

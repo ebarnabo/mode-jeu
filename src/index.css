@@ -67,6 +67,12 @@
   body.overlay-body #root {
     background: transparent !important;
   }
+  html.mixer-root,
+  body.mixer-body,
+  body.mixer-body #root {
+    background: #121214 !important;
+    overflow: hidden;
+  }
   :focus-visible { @apply outline-none ring-2 ring-brass/70 ring-offset-2 ring-offset-ink rounded-xl; }
 }
 
@@ -82,6 +88,10 @@
     border-radius: 999px;
     background: #2a2a2e;
     accent-color: #e2b15a;
+  }
+  html.mixer-root .mixer-range,
+  .mixer-range {
+    cursor: pointer;
   }
   .mixer-range::-webkit-slider-thumb {
     -webkit-appearance: none;

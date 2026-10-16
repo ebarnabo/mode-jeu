@@ -578,7 +578,12 @@ fn get_session(app: AppHandle) -> Session {
 }
 
 #[tauri::command]
-fn list_processes(app: AppHandle) -> Vec<ProcGroup> {
+fn list_processes(app: AppHandle, fresh: Option<bool>) -> Vec<ProcGroup> {
+    if fresh.unwrap_or(false) {
+        if let Ok(mut g) = PROC_CACHE.lock() {
+            *g = None;
+        }
+    }
     list_processes_cached(&load_config(&app))
 }
 
@@ -934,6 +939,134 @@ fn set_app_mute(id: String, muted: bool) -> Vec<mixer::AppVolume> {
     mixer::set_mute(&id, muted)
 }
 
+fn mixer_flyout_open(app: &AppHandle) -> bool {
+    app.get_webview_window("mixer")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
+
+static MIXER_OPENED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+static MIXER_CLOSED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn mixer_just_opened() -> bool {
+    MIXER_OPENED_AT
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .map(|at| at.elapsed() < Duration::from_millis(450))
+        .unwrap_or(false)
+}
+
+fn mixer_just_closed() -> bool {
+    MIXER_CLOSED_AT
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .map(|at| at.elapsed() < Duration::from_millis(280))
+        .unwrap_or(false)
+}
+
+fn close_mixer_flyout(app: &AppHandle, force: bool) {
+    if !force && mixer_just_opened() {
+        return;
+    }
+    let had = app.get_webview_window("mixer").is_some();
+    if let Some(w) = app.get_webview_window("mixer") {
+        let _ = w.destroy();
+    }
+    if had {
+        if let Ok(mut g) = MIXER_CLOSED_AT.lock() {
+            *g = Some(Instant::now());
+        }
+        if let Ok(mut g) = MIXER_OPENED_AT.lock() {
+            *g = None;
+        }
+    }
+    overlay::restore_after_native_menu();
+    refresh_overlay(app);
+}
+
+fn place_mixer_flyout(app: &AppHandle, win: &tauri::WebviewWindow) {
+    let n = mixer::list(true).len().clamp(1, 8);
+    let logical_h = 64.0 + 56.0 + n as f64 * 52.0;
+    let logical_w = 328.0;
+    let monitors = overlay::list_monitors(app).unwrap_or_default();
+    let mon = monitors
+        .iter()
+        .find(|m| m.is_primary)
+        .or(monitors.first());
+    let Some(mon) = mon else { return };
+    let scale = mon.scale.max(1.0);
+    let width = (logical_w * scale).round() as u32;
+    let height = (logical_h.min(520.0) * scale).round() as u32;
+    let margin = (12.0 * scale).round() as i32;
+    let taskbar = (48.0 * scale).round() as i32;
+    let x = mon.x + mon.width as i32 - width as i32 - margin;
+    let y = mon.y + mon.height as i32 - height as i32 - taskbar - margin;
+    let _ = win.set_size(tauri::PhysicalSize::new(width, height));
+    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+fn open_mixer_flyout(app: &AppHandle) {
+    if mixer_just_closed() {
+        return;
+    }
+    overlay::yield_for_native_menu(app);
+    let _ = mixer::list(true);
+    if let Ok(mut g) = MIXER_OPENED_AT.lock() {
+        *g = Some(Instant::now());
+    }
+    if let Some(win) = app.get_webview_window("mixer") {
+        place_mixer_flyout(app, &win);
+        let _ = win.set_skip_taskbar(true);
+        let _ = win.set_always_on_top(true);
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    use tauri::webview::WebviewWindowBuilder;
+    use tauri::WebviewUrl;
+    let Ok(win) = WebviewWindowBuilder::new(
+        app,
+        "mixer",
+        WebviewUrl::App("index.html?window=mixer".into()),
+    )
+    .title("Son")
+    .inner_size(328.0, 420.0)
+    .resizable(false)
+    .decorations(false)
+    .transparent(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(false)
+    .focused(true)
+    .shadow(true)
+    .background_color(tauri::window::Color(0x12, 0x12, 0x14, 0xff))
+    .additional_browser_args("--disable-background-networking --disable-component-update --disable-sync --disable-features=Translate,MediaRouter --mute-audio")
+    .build() else {
+        overlay::restore_after_native_menu();
+        refresh_overlay(app);
+        return;
+    };
+    place_mixer_flyout(app, &win);
+    let _ = win.show();
+    let _ = win.set_focus();
+}
+
+#[tauri::command]
+fn toggle_mixer_flyout(app: AppHandle) {
+    if mixer_flyout_open(&app) {
+        close_mixer_flyout(&app, true);
+    } else {
+        open_mixer_flyout(&app);
+    }
+}
+
+#[tauri::command]
+fn hide_mixer_flyout(app: AppHandle) {
+    close_mixer_flyout(&app, true);
+}
+
 #[derive(Serialize, Clone)]
 struct MusicApp {
     name: String,
@@ -1114,10 +1247,11 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     // Menu court, libellés ASCII-safe : évite certains bugs de rendu du menu
     // contextuel Windows (clic droit icône tray / barre des tâches).
     let open = MenuItem::with_id(app, "open", "Ouvrir", true, None::<&str>)?;
+    let mixer_item = MenuItem::with_id(app, "mixer", "Mixeur", true, None::<&str>)?;
     let overlay_toggle =
         MenuItem::with_id(app, "overlay", "Overlay on/off", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &overlay_toggle, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &mixer_item, &overlay_toggle, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("mode-jeu-tray")
         .tooltip("Mode Jeu")
@@ -1127,6 +1261,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             overlay::restore_after_native_menu();
             match event.id.as_ref() {
                 "open" => show_main(app),
+                "mixer" => open_mixer_flyout(app),
                 "overlay" => {
                     let _ = toggle_overlay_visibility(app.clone());
                 }
@@ -1152,8 +1287,10 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
                     ..
+                } => {
+                    toggle_mixer_flyout(tray.app_handle().clone());
                 }
-                | TrayIconEvent::DoubleClick {
+                TrayIconEvent::DoubleClick {
                     button: MouseButton::Left,
                     ..
                 } => {
@@ -1291,6 +1428,19 @@ pub fn run_app() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "mixer" {
+                match event {
+                    WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        close_mixer_flyout(window.app_handle(), true);
+                    }
+                    WindowEvent::Focused(false) => {
+                        close_mixer_flyout(window.app_handle(), false);
+                    }
+                    _ => {}
+                }
+                return;
+            }
             if window.label() == "overlay" || window.label().starts_with("notch-") {
                 match event {
                     WindowEvent::CloseRequested { api, .. } => {
@@ -1356,6 +1506,8 @@ pub fn run_app() {
             list_app_volumes,
             set_app_volume,
             set_app_mute,
+            toggle_mixer_flyout,
+            hide_mixer_flyout,
             list_music_apps,
             launch_music_app,
             pick_music_app,

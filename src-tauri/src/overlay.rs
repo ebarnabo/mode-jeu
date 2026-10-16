@@ -367,7 +367,6 @@ pub fn sync_overlay(app: &AppHandle, cfg: &OverlayConfig, game_active: bool) {
     if let Err(e) = place_overlay(app, &win, cfg, notch) {
         eprintln!("overlay place: {e}");
     }
-    decorate_overlay_window(&win);
     let _ = win.set_ignore_cursor_events(!notch);
     let _ = win.set_always_on_top(true);
     let _ = win.show();
@@ -495,7 +494,7 @@ fn notch_size(cfg: &OverlayConfig, scale: f64) -> (u32, u32) {
         logical = if cfg.notch_show_mascot { 52.0 } else { 92.0 };
     }
     let mixer_h = if mixer {
-        12.0 + (crate::mixer::last_count().clamp(1, 4) as f64) * 36.0
+        16.0 + (crate::mixer::last_count().clamp(1, 6) as f64) * 40.0
     } else {
         0.0
     };
@@ -589,7 +588,6 @@ fn sync_mirrors(app: &AppHandle, cfg: &OverlayConfig, notch: bool) {
             let (width, height) = notch_size(cfg, scale);
             if place_notch_at(&win, mon, &cfg.notch_position, width, height).is_ok() {
                 set_page_quiet(&win, false);
-                decorate_overlay_window(&win);
                 let _ = win.set_always_on_top(true);
                 let _ = win.show();
                 decorate_overlay_window(&win);
@@ -622,7 +620,7 @@ mod win32 {
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumChildWindows, GetWindowLongPtrW, SetPropW, SetWindowLongPtrW, SetWindowPos,
         GWL_EXSTYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-        WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
     };
 
     fn hwnd_of(win: &WebviewWindow) -> Option<HWND> {
@@ -630,9 +628,16 @@ mod win32 {
         Some(HWND(raw.0 as *mut c_void))
     }
 
+    static DECORATED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<isize>>> =
+        std::sync::OnceLock::new();
+
+    fn decorated_set() -> &'static std::sync::Mutex<std::collections::HashSet<isize>> {
+        DECORATED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+    }
+
     unsafe fn strip_taskbar(hwnd: HWND) {
         let mut ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        ex |= WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize;
+        ex |= WS_EX_TOOLWINDOW.0 as isize;
         ex &= !(WS_EX_APPWINDOW.0 as isize);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
         let _ = SetWindowPos(
@@ -664,8 +669,16 @@ mod win32 {
         let Some(hwnd) = hwnd_of(win) else {
             return;
         };
+        let key = hwnd.0 as isize;
         unsafe {
             strip_taskbar(hwnd);
+        }
+        if let Ok(g) = decorated_set().lock() {
+            if g.contains(&key) {
+                return;
+            }
+        }
+        unsafe {
             if let Ok(list) = CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_ALL) {
                 let _ = list.HrInit();
                 let _ = list.DeleteTab(hwnd);
@@ -674,6 +687,9 @@ mod win32 {
                 let _ = EnumChildWindows(hwnd, Some(delete_child_tab), LPARAM(ptr as isize));
                 drop(Box::from_raw(ptr));
             }
+        }
+        if let Ok(mut g) = decorated_set().lock() {
+            g.insert(key);
         }
     }
 

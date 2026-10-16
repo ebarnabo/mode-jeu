@@ -397,7 +397,7 @@ export default function OverlayApp() {
               className="min-w-0 max-w-[520px]"
               onPointerDown={(e) => e.stopPropagation()}
             >
-              <VolumeMixer compact />
+              <VolumeMixer variant="compact" />
             </div>
           )}
 
