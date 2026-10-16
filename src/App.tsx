@@ -22,6 +22,7 @@ import {
 import { UpdateBar, UpdateProvider, UpdatesPanel } from "@/components/UpdateBar";
 import { PowerIgnition } from "@/components/PowerIgnition";
 import { SoftwarePanel } from "@/components/SoftwarePanel";
+import { VolumeMixer } from "@/components/VolumeMixer";
 import { MonitorPicker, type MonitorInfo } from "@/components/MonitorPicker";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -943,6 +944,7 @@ export default function App() {
 
         {tab === "overlay" && (
           <section className="space-y-8">
+            <VolumeMixer />
             <div className="overflow-hidden rounded-2xl border border-line bg-surface/60">
               <OptionRow
                 label="Montrer l’overlay"

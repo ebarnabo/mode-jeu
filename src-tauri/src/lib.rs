@@ -2,6 +2,7 @@ mod boost;
 mod disks;
 mod games;
 mod media;
+mod mixer;
 mod metrics;
 mod overlay;
 mod shelf;
@@ -896,6 +897,7 @@ fn set_notch_compact(app: AppHandle, compact: bool) -> OverlayConfig {
     cfg.overlay.notch_compact = compact;
     if compact {
         overlay::set_music_row(false);
+        overlay::set_mixer_row(false);
     }
     store_config(&app, &cfg);
     sync_from_config(&app, &cfg);
@@ -906,6 +908,30 @@ fn set_notch_compact(app: AppHandle, compact: bool) -> OverlayConfig {
 fn set_music_row(app: AppHandle, open: bool) {
     overlay::set_music_row(open);
     refresh_overlay(&app);
+}
+
+#[tauri::command]
+fn set_mixer_row(app: AppHandle, open: bool) {
+    overlay::set_mixer_row(open);
+    if open {
+        let _ = mixer::list(true);
+    }
+    refresh_overlay(&app);
+}
+
+#[tauri::command]
+fn list_app_volumes() -> Vec<mixer::AppVolume> {
+    mixer::list(false)
+}
+
+#[tauri::command]
+fn set_app_volume(id: String, volume: u8) -> Vec<mixer::AppVolume> {
+    mixer::set_volume(&id, volume)
+}
+
+#[tauri::command]
+fn set_app_mute(id: String, muted: bool) -> Vec<mixer::AppVolume> {
+    mixer::set_mute(&id, muted)
 }
 
 #[derive(Serialize, Clone)]
@@ -1309,6 +1335,10 @@ pub fn run_app() {
             media_previous,
             set_notch_compact,
             set_music_row,
+            set_mixer_row,
+            list_app_volumes,
+            set_app_volume,
+            set_app_mute,
             list_music_apps,
             launch_music_app,
             pick_music_app,

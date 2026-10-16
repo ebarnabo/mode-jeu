@@ -112,6 +112,7 @@ pub struct OverlayPayload {
     pub session_active: bool,
     pub notch_visible: bool,
     pub music_row: bool,
+    pub mixer_row: bool,
 }
 
 static MAIN_BG: AtomicBool = AtomicBool::new(false);
@@ -165,13 +166,28 @@ pub fn clear_notch_snooze() {
 }
 
 static MUSIC_ROW: AtomicBool = AtomicBool::new(false);
+static MIXER_ROW: AtomicBool = AtomicBool::new(false);
 
 pub fn set_music_row(open: bool) {
     MUSIC_ROW.store(open, Ordering::SeqCst);
+    if open {
+        MIXER_ROW.store(false, Ordering::SeqCst);
+    }
 }
 
 pub fn music_row() -> bool {
     MUSIC_ROW.load(Ordering::Relaxed)
+}
+
+pub fn set_mixer_row(open: bool) {
+    MIXER_ROW.store(open, Ordering::SeqCst);
+    if open {
+        MUSIC_ROW.store(false, Ordering::SeqCst);
+    }
+}
+
+pub fn mixer_row() -> bool {
+    MIXER_ROW.load(Ordering::Relaxed)
 }
 
 fn main_is_background(app: &AppHandle) -> bool {
@@ -197,6 +213,7 @@ pub fn payload(app: &AppHandle, cfg: &OverlayConfig, session_active: bool) -> Ov
         session_active,
         notch_visible: should_show_notch(app, cfg, session_active),
         music_row: music_row(),
+        mixer_row: mixer_row(),
     }
 }
 
@@ -414,7 +431,8 @@ pub fn toggle_hidden(cfg: &mut OverlayConfig) {
 fn notch_size(cfg: &OverlayConfig, scale: f64) -> (u32, u32) {
     let shelf = crate::shelf::expanded();
     let music = music_row();
-    let extra = !cfg.notch_compact && (shelf || music);
+    let mixer = mixer_row();
+    let extra = !cfg.notch_compact && (shelf || music || mixer);
     let mut logical: f64 = if cfg.notch_show_mascot { 132.0 } else { 96.0 };
     if cfg.notch_show_ram {
         logical += 96.0;
@@ -425,14 +443,27 @@ fn notch_size(cfg: &OverlayConfig, scale: f64) -> (u32, u32) {
     if cfg.notch_show_media {
         logical += 148.0;
     }
+    logical += 36.0;
+    if mixer {
+        logical = logical.max(420.0);
+    }
     if extra {
         logical = logical.max(560.0);
     }
     if cfg.notch_compact {
         logical = if cfg.notch_show_mascot { 52.0 } else { 92.0 };
     }
+    let mixer_h = if mixer {
+        12.0 + (crate::mixer::last_count().clamp(1, 4) as f64) * 36.0
+    } else {
+        0.0
+    };
     let height = if cfg.notch_compact {
         if cfg.notch_show_mascot { 44.0 } else { 36.0 }
+    } else if mixer && shelf {
+        56.0 + mixer_h + 40.0
+    } else if mixer {
+        56.0 + mixer_h
     } else if shelf && music {
         148.0
     } else if extra {

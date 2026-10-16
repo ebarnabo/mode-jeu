@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { EyeOff, File, Folder, Minus, Music, Pause, Play, SkipBack, SkipForward, X } from "lucide-react";
+import { EyeOff, File, Folder, Minus, Music, Pause, Play, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { NotchMascot } from "@/components/NotchMascot";
+import { VolumeMixer } from "@/components/VolumeMixer";
 import { cn } from "@/lib/utils";
 
 type OverlayConfig = {
@@ -26,6 +27,7 @@ type OverlayConfig = {
   session_active: boolean;
   notch_visible: boolean;
   music_row?: boolean;
+  mixer_row?: boolean;
 };
 
 type Metrics = {
@@ -254,7 +256,8 @@ export default function OverlayApp() {
     const showCpu = cfg.notch_show_cpu !== false;
     const showMedia = cfg.notch_show_media !== false;
     const musicOpen = !!cfg.music_row;
-    const roomy = !cfg.notch_compact && (dropHover || shelf.length > 0 || musicOpen);
+    const mixerOpen = !!cfg.mixer_row;
+    const roomy = !cfg.notch_compact && (dropHover || shelf.length > 0 || musicOpen || mixerOpen);
     const mediaLabel = media.title
       ? `${media.playing ? "Pause" : "Lecture"} · ${media.title}${media.artist ? ` — ${media.artist}` : ""}`
       : media.playing
@@ -359,6 +362,16 @@ export default function OverlayApp() {
                 </NotchBtn>
               </>
             )}
+            <NotchBtn
+              label="Volume des apps"
+              hot={mixerOpen}
+              onClick={(e) => {
+                e.stopPropagation();
+                invoke("set_mixer_row", { open: !mixerOpen }).catch(() => {});
+              }}
+            >
+              <Volume2 className="h-3 w-3" />
+            </NotchBtn>
             <span className="ml-auto flex items-center">
               <NotchBtn
                 label="Réduire"
@@ -378,6 +391,15 @@ export default function OverlayApp() {
               </NotchBtn>
             </span>
           </div>
+
+          {mixerOpen && (
+            <div
+              className="min-w-0 max-w-[520px]"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <VolumeMixer compact />
+            </div>
+          )}
 
           {musicOpen && (
             <div className="flex max-w-[520px] items-center gap-1.5 overflow-x-auto pb-0.5">
